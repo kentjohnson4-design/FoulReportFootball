@@ -1,5 +1,7 @@
 # Foul Report Football
 
+**Live app:** https://kentjohnson4-design.github.io/FoulReportFootball/
+
 An offline-first web app (PWA) for recording varsity high school football foul reports on a phone or tablet, then sending the report to the game's referee.
 
 ## What it does
