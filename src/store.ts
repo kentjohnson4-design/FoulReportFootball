@@ -75,11 +75,12 @@ export function blankGame(prev?: Game): Game {
     currentQuarter: 1,
     status: 'in-progress',
     notes: '',
+    sentLog: [],
   };
 }
 
 /** Fill in any fields added after a game was saved, so old games keep loading. */
-function migrate(g: Partial<Game>): Game {
+export function migrate(g: Partial<Game>): Game {
   const base = blankGame();
   return {
     ...base,
@@ -89,6 +90,7 @@ function migrate(g: Partial<Game>): Game {
     periodTimes: { ...base.periodTimes, ...(g.periodTimes ?? {}) },
     fouls: g.fouls ?? [],
     timeouts: g.timeouts ?? [],
+    sentLog: g.sentLog ?? [],
   } as Game;
 }
 

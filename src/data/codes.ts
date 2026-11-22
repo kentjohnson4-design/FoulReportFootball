@@ -117,3 +117,60 @@ export const DEFAULT_SIDE: Record<string, 'O' | 'D' | 'K' | 'R'> = {
 export const DEFAULT_PLAYER: Record<string, string> = {
   SLW: 'TEAM', SL5: 'TEAM', 'UNS-SLM': 'HC', 'UNS-EQP': 'HC', 'UNS-BCH': 'BENCH', DOG: 'TEAM', 'UNS-DOG': 'TEAM',
 };
+
+// Extra words people search by that are not in the official foul name.
+const ALIASES: Record<string, string> = {
+  DPI: 'PI interference',
+  OPI: 'PI interference',
+  OH: 'hold',
+  DH: 'hold',
+  ENC: 'offside neutral zone',
+  FM5: 'facemask',
+  'PF-FMM': 'facemask',
+  'PF-IHC': 'spear spearing',
+  'PF-TGT': 'helmet',
+  'PF-RPS': 'roughing',
+  IBB: 'back',
+  SLW: 'sideline',
+  SL5: 'sideline',
+  'UNS-SLM': 'sideline',
+};
+
+/** Starting order for "most called" until the user has their own history. */
+export const STARTER_COMMON = ['FST', 'OH', 'IBB', 'DOG', 'ENC', 'PF-UNR', 'DPI', 'ILF', 'ILM', 'DH'];
+
+function searchWords(c: FoulCode): string[] {
+  const extra: string[] = [];
+  if (c.code.startsWith('PF-')) extra.push('personal', 'foul');
+  if (c.code.startsWith('UNS-')) extra.push('unsportsmanlike');
+  if (c.code.startsWith('DQ-')) extra.push('ejection', 'eject', 'disqualification');
+  return [...c.code.split('-'), ...c.name.split(/[^A-Za-z0-9<]+/), ...(ALIASES[c.code] ?? '').split(' '), ...extra]
+    .filter(Boolean)
+    .map((w) => w.toUpperCase());
+}
+
+/**
+ * Codes matching a search, best first. Every word typed must start one of the code's words
+ * (code, name or common nickname), so "hold def" finds DH and "pi" finds DPI and OPI.
+ * Ties go to the codes this user calls most.
+ */
+export function searchCodes(query: string, freq: Map<string, number>): FoulCode[] {
+  const q = query.trim().toUpperCase();
+  if (!q) return FOUL_CODES;
+  const tokens = q.split(/\s+/);
+  const scored: [FoulCode, number][] = [];
+  for (const c of FOUL_CODES) {
+    const bare = c.code.replace(/^(PF|UNS|DQ)-/, '');
+    let score = 0;
+    if (c.code === q || bare === q) score = 100;
+    else if (c.code.startsWith(q) || bare.startsWith(q)) score = 80;
+    else {
+      const words = searchWords(c);
+      if (tokens.every((t) => words.some((w) => w.startsWith(t)))) score = 50;
+    }
+    if (score) scored.push([c, score]);
+  }
+  return scored
+    .sort((a, b) => b[1] - a[1] || (freq.get(b[0].code) ?? 0) - (freq.get(a[0].code) ?? 0) || a[0].code.localeCompare(b[0].code))
+    .map(([c]) => c);
+}

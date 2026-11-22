@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { CODE_MAP, DEFAULT_PLAYER, DEFAULT_SIDE, FOUL_CODES, codeGroup } from './data/codes';
+import { CODE_MAP, DEFAULT_PLAYER, DEFAULT_SIDE, FOUL_CODES, STARTER_COMMON, codeGroup, searchCodes } from './data/codes';
+import { codeFrequency } from './stats';
 import { clockError, draftAlerts, teamName } from './rules';
-import { getRecentCodes, pushRecentCode, uid } from './store';
+import { pushRecentCode, uid } from './store';
 import type { Foul, Game, Official, Quarter, Side, Status, Team } from './types';
 import { OFFICIALS, QUARTERS, SIDE_NAMES, STATUS_NAMES, quarterLabel } from './types';
 import { Chips, ClockInput, Field, Group, Modal } from './ui';
@@ -26,6 +27,7 @@ const GROUP_ORDER = ['Other fouls', 'Personal fouls', 'Unsportsmanlike', 'Disqua
 
 export function FoulForm(props: {
   game: Game;
+  allGames: Game[];
   initial?: Foul;
   index?: number;
   onSave: (f: Foul) => void;
@@ -36,7 +38,14 @@ export function FoulForm(props: {
   const [d, setD] = useState<Foul>(() => props.initial ?? blankFoul(game));
   const [query, setQuery] = useState('');
   const [browsing, setBrowsing] = useState(!props.initial);
-  const recents = useMemo(getRecentCodes, []);
+  // Most-called codes across every game on this device; the starter list fills in until
+  // there are enough of the user's own fouls to rank.
+  const freq = useMemo(() => codeFrequency(props.allGames), [props.allGames]);
+  const mostCalled = useMemo(() => {
+    const own = [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
+    return [...new Set([...own, ...STARTER_COMMON])].slice(0, 8);
+  }, [freq]);
+  const historyCount = useMemo(() => [...freq.values()].reduce((a, b) => a + b, 0), [freq]);
   const set = (patch: Partial<Foul>) => setD((prev) => ({ ...prev, ...patch }));
 
   const pickCode = (code: string) => {
@@ -50,13 +59,7 @@ export function FoulForm(props: {
     setBrowsing(false);
   };
 
-  const matches = useMemo(() => {
-    const q = query.trim().toUpperCase();
-    if (!q) return FOUL_CODES;
-    const starts = FOUL_CODES.filter((c) => c.code.startsWith(q) || c.code.replace(/^(PF|UNS|DQ)-/, '').startsWith(q));
-    const rest = FOUL_CODES.filter((c) => !starts.includes(c) && (c.code.includes(q) || c.name.toUpperCase().includes(q)));
-    return [...starts, ...rest];
-  }, [query]);
+  const matches = useMemo(() => searchCodes(query, freq), [query, freq]);
 
   const alerts = draftAlerts(game, d);
   const clockErr = clockError(d.time);
@@ -130,7 +133,7 @@ export function FoulForm(props: {
             <input
               type="search"
               className="code-search"
-              placeholder="Type code or name: DPI, hold, horse…"
+              placeholder="Search: DPI, hold, PI, facemask, horse…"
               value={query}
               autoCapitalize="characters"
               autoCorrect="off"
@@ -143,22 +146,18 @@ export function FoulForm(props: {
                 }
               }}
             />
-            {!query && recents.length > 0 && (
-              <div className="recents">
-                <span className="muted">Recent</span>
-                {recents.map((c) => (
-                  <button type="button" key={c} className="chip" onClick={() => pickCode(c)}>
-                    {c}
-                  </button>
-                ))}
-              </div>
-            )}
             <div className="code-list" role="listbox" aria-label="Foul codes">
-              {(query ? [''] : GROUP_ORDER).map((g) => {
-                const items = query ? matches : matches.filter((c) => codeGroup(c.code) === g);
+              {(query ? ['Matches'] : ['MOST', ...GROUP_ORDER]).map((g) => {
+                const items =
+                  g === 'Matches'
+                    ? matches
+                    : g === 'MOST'
+                      ? mostCalled.map((c) => CODE_MAP.get(c)!).filter(Boolean)
+                      : FOUL_CODES.filter((c) => codeGroup(c.code) === g);
+                const label = g === 'MOST' ? (historyCount >= 10 ? 'Your most called' : 'Most common') : g === 'Matches' ? '' : g;
                 return (
-                  <div key={g || 'results'}>
-                    {g && <div className="code-group">{g}</div>}
+                  <div key={g}>
+                    {label && <div className="code-group">{label}</div>}
                     {items.map((c) => (
                       <button
                         type="button"
@@ -170,7 +169,10 @@ export function FoulForm(props: {
                       >
                         <b>{c.code}</b>
                         <span>{c.name}</span>
-                        <em>{c.yds}</em>
+                        <em>
+                          {g === 'MOST' && freq.get(c.code) ? `${freq.get(c.code)}× · ` : ''}
+                          {c.yds}
+                        </em>
                       </button>
                     ))}
                   </div>

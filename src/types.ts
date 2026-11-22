@@ -41,6 +41,13 @@ export interface Toss {
   otEnd: string;
 }
 
+export interface SendRecord {
+  at: number;
+  method: 'share-pdf' | 'email-text' | 'manual';
+  /** Fingerprint of the report content when it was sent, to spot later changes. */
+  hash: string;
+}
+
 export interface Game {
   id: string;
   createdAt: number;
@@ -61,6 +68,7 @@ export interface Game {
   currentQuarter: Quarter;
   status: 'in-progress' | 'final';
   notes: string;
+  sentLog: SendRecord[];
 }
 
 export const OFFICIALS: Official[] = ['R', 'U', 'L', 'H', 'B', 'D'];

@@ -1,10 +1,14 @@
 import { teamName } from './rules';
+import { officialNames, schoolNames } from './stats';
+import { useMemo } from 'react';
 import type { Game, PeriodKey, Team, Toss } from './types';
 import { CREW_NAMES, CREW_POSITIONS } from './types';
 import { Chips, Field, Group, WallTimeInput } from './ui';
 
-export function InfoTab(props: { game: Game; update: (p: Partial<Game>) => void }) {
+export function InfoTab(props: { game: Game; allGames: Game[]; update: (p: Partial<Game>) => void }) {
   const { game, update } = props;
+  const schools = useMemo(() => schoolNames(props.allGames.filter((g) => g.id !== game.id)), [props.allGames, game.id]);
+  const officials = useMemo(() => officialNames(props.allGames.filter((g) => g.id !== game.id)), [props.allGames, game.id]);
   const setToss = (p: Partial<Toss>) => update({ toss: { ...game.toss, ...p } });
   const setPeriod = (k: PeriodKey, which: 'start' | 'end', v: string) =>
     update({ periodTimes: { ...game.periodTimes, [k]: { ...game.periodTimes[k], [which]: v } } });
@@ -12,6 +16,16 @@ export function InfoTab(props: { game: Game; update: (p: Partial<Game>) => void 
 
   return (
     <div className="form">
+      <datalist id="school-names">
+        {schools.map((n) => (
+          <option key={n} value={n} />
+        ))}
+      </datalist>
+      <datalist id="official-names">
+        {officials.map((n) => (
+          <option key={n} value={n} />
+        ))}
+      </datalist>
       <section className="card">
         <h3>Game</h3>
         <div className="row2">
@@ -23,11 +37,11 @@ export function InfoTab(props: { game: Game; update: (p: Partial<Game>) => void 
           </Field>
         </div>
         <div className="row2">
-          <Field label="Home (H)">
-            <input value={game.home} onChange={(e) => update({ home: e.target.value })} placeholder="Home team" />
+          <Field label="Home school (H)">
+            <input list="school-names" autoComplete="off" value={game.home} onChange={(e) => update({ home: e.target.value })} placeholder="Home high school" />
           </Field>
-          <Field label="Visitor (V)">
-            <input value={game.away} onChange={(e) => update({ away: e.target.value })} placeholder="Visiting team" />
+          <Field label="Visiting school (V)">
+            <input list="school-names" autoComplete="off" value={game.away} onChange={(e) => update({ away: e.target.value })} placeholder="Visiting high school" />
           </Field>
         </div>
         <div className="row4">
@@ -106,7 +120,7 @@ export function InfoTab(props: { game: Game; update: (p: Partial<Game>) => void 
         <div className="crew-grid">
           {CREW_POSITIONS.map((p) => (
             <Field key={p} label={`${p} · ${CREW_NAMES[p]}`}>
-              <input value={game.crew[p]} onChange={(e) => update({ crew: { ...game.crew, [p]: e.target.value } })} placeholder={p === 'D' ? 'If used' : ''} />
+              <input list="official-names" autoComplete="off" value={game.crew[p]} onChange={(e) => update({ crew: { ...game.crew, [p]: e.target.value } })} placeholder={p === 'D' ? 'If used' : ''} />
             </Field>
           ))}
         </div>

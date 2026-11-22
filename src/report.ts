@@ -45,9 +45,10 @@ export function periodTimeText(game: Game): string {
 }
 
 /** Plain-text version of the report, used for the email body and clipboard. */
-export function buildTextReport(game: Game): string {
+export function buildTextReport(game: Game, link?: string): string {
   const L: string[] = [];
   L.push(`FOUL REPORT (VARSITY)`);
+  if (link) L.push(`View online: ${link}`);
   L.push(`Date: ${fmtDate(game.date)}`);
   L.push(`Home: ${teamName(game, 'H')} ${game.homeScore || '—'}   Visitor: ${teamName(game, 'V')} ${game.awayScore || '—'}`);
   if (game.homeKicker || game.awayKicker) L.push(`Kicker #: Home ${game.homeKicker || '—'}, Visitor ${game.awayKicker || '—'}`);
@@ -105,4 +106,26 @@ export function buildTextReport(game: Game): string {
     L.push(`NOTES: ${game.notes.trim()}`);
   }
   return L.join('\n');
+}
+
+/** Short fingerprint of the report's content, used to tell whether it changed after sending. */
+export function hashReport(game: Game): string {
+  const text = buildTextReport(game);
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+export type SendState = 'never' | 'sent' | 'changed';
+
+export function sendState(game: Game): SendState {
+  const last = game.sentLog[game.sentLog.length - 1];
+  if (!last) return 'never';
+  return last.hash === hashReport(game) ? 'sent' : 'changed';
+}
+
+export const SEND_METHOD_NAMES = { 'share-pdf': 'Share PDF', 'email-text': 'Email as text', manual: 'Marked sent' } as const;
+
+export function fmtWhen(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }

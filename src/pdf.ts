@@ -10,7 +10,7 @@ type DocWithTable = jsPDF & { lastAutoTable?: { finalY: number } };
 
 const HEAD = [30, 41, 59] as [number, number, number];
 
-export function buildPdf(game: Game): Blob {
+export function buildPdf(game: Game, link?: string): Blob {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' }) as DocWithTable;
   const W = doc.internal.pageSize.getWidth();
   const M = 36;
@@ -33,6 +33,12 @@ export function buildPdf(game: Game): Blob {
   doc.text(`Home kicker #: ${game.homeKicker || '—'}    Visitor kicker #: ${game.awayKicker || '—'}`, M, y);
   const times = periodTimeText(game);
   if (times) doc.text(`Period times: ${times}`, W / 2, y);
+  if (link) {
+    y += 13;
+    doc.setTextColor(29, 78, 216);
+    doc.textWithLink('View this report online (opens in any browser)', M, y, { url: link });
+    doc.setTextColor(0);
+  }
   y += 10;
 
   autoTable(doc, {

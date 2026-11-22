@@ -1,0 +1,108 @@
+import { describe, expect, it } from 'vitest';
+import { searchCodes } from './data/codes';
+import { buildTextReport, hashReport, sendState } from './report';
+import { decodeGame, encodeGame } from './share';
+import { codeFrequency, officialStats, schoolNames, teamHistory } from './stats';
+import { blankGame } from './store';
+import type { Foul, Game } from './types';
+
+let n = 0;
+const foul = (p: Partial<Foul>): Foul => ({
+  id: `f${++n}`, quarter: 1, time: '10:00', team: 'H', code: 'FST', side: 'O', player: '72',
+  status: 'A', official: 'U', note: '', createdAt: n, ...p,
+});
+const game = (p: Partial<Game> = {}): Game => ({ ...blankGame(), home: 'Central', away: 'North Ridge', ...p });
+
+describe('code search', () => {
+  const none = new Map<string, number>();
+  const codes = (q: string, f = none) => searchCodes(q, f).map((c) => c.code);
+  it('puts an exact code first', () => {
+    expect(codes('dpi')[0]).toBe('DPI');
+    expect(codes('TGT')[0]).toBe('PF-TGT');
+  });
+  it('finds by name words and nicknames', () => {
+    expect(codes('hold')).toEqual(expect.arrayContaining(['OH', 'DH']));
+    expect(codes('hold def')).toEqual(['DH']);
+    expect(codes('pi')).toEqual(expect.arrayContaining(['DPI', 'OPI']));
+    expect(codes('facemask')).toEqual(expect.arrayContaining(['FM5', 'PF-FMM']));
+    expect(codes('horse')).toEqual(['PF-HCT']);
+    expect(codes('offside')).toEqual(['ENC']);
+  });
+  it('breaks ties with the user’s most called codes', () => {
+    expect(codes('hold', new Map([['DH', 5], ['OH', 1]]))[0]).toBe('DH');
+    expect(codes('hold', new Map([['OH', 5], ['DH', 1]]))[0]).toBe('OH');
+  });
+});
+
+describe('sent tracking', () => {
+  it('knows never / sent / changed', () => {
+    const g = game({ fouls: [foul({})] });
+    expect(sendState(g)).toBe('never');
+    g.sentLog = [{ at: 1, method: 'share-pdf', hash: hashReport(g) }];
+    expect(sendState(g)).toBe('sent');
+    g.fouls = [...g.fouls, foul({ code: 'OH' })];
+    expect(sendState(g)).toBe('changed');
+  });
+  it('is not affected by marking the game final', () => {
+    const g = game({ fouls: [foul({})] });
+    g.sentLog = [{ at: 1, method: 'manual', hash: hashReport(g) }];
+    expect(sendState({ ...g, status: 'final' })).toBe('sent');
+  });
+});
+
+describe('report link', () => {
+  it('round-trips a game without the referee email', async () => {
+    const g = game({
+      refereeEmail: 'ref@example.com',
+      homeScore: '21', awayScore: '14',
+      crew: { ...blankGame().crew, R: 'Pat Lee', B: 'Sam Ortiz' },
+      fouls: Array.from({ length: 20 }, (_, i) => foul({ code: i % 2 ? 'DPI' : 'OH', player: String(i), note: i === 3 ? 'late flag' : '' })),
+    });
+    const token = await encodeGame(g);
+    expect(token.length).toBeLessThan(2500);
+    const back = await decodeGame(token);
+    expect(back.refereeEmail).toBe('');
+    expect(back.fouls).toHaveLength(20);
+    expect(buildTextReport(back).replace(/Referee/g, '')).toBe(buildTextReport({ ...g, refereeEmail: '' }).replace(/Referee/g, ''));
+  });
+  it('rejects a damaged link', async () => {
+    await expect(decodeGame('xabc')).rejects.toThrow();
+  });
+});
+
+describe('history and stats', () => {
+  const g1 = game({
+    id: 'g1', date: '2026-09-04', homeScore: '28', awayScore: '7',
+    crew: { ...blankGame().crew, R: 'Pat Lee', U: 'Chris Day' },
+    fouls: [foul({ official: 'R', code: 'OH' }), foul({ official: 'U', code: 'FST', team: 'V' }), foul({ official: 'U', code: 'UNS-TAU', team: 'V' })],
+  });
+  const g2 = game({
+    id: 'g2', date: '2026-09-11', home: 'north ridge ', away: 'Eastside', homeScore: '10', awayScore: '17',
+    crew: { ...blankGame().crew, R: 'pat  lee', B: 'Chris Day' },
+    fouls: [foul({ official: 'R', code: 'OH', team: 'H' }), foul({ official: 'B', code: 'DPI', team: 'V' })],
+  });
+
+  it('credits flags to the official at the calling position, merging name spellings', () => {
+    const stats = officialStats([g1, g2]);
+    const pat = stats.find((s) => s.name.toLowerCase().includes('pat'))!;
+    expect(pat.games).toHaveLength(2);
+    expect(pat.flags).toHaveLength(2);
+    expect(pat.positions.R).toBe(2);
+    const chris = stats.find((s) => s.name === 'Chris Day')!;
+    expect(chris.flags.map((f) => f.code).sort()).toEqual(['DPI', 'FST', 'UNS-TAU']);
+    expect(chris.positions).toEqual({ U: 1, B: 1 });
+  });
+
+  it('builds team history with records from that team’s side', () => {
+    const teams = teamHistory([g1, g2]);
+    const nr = teams.find((t) => t.name.toLowerCase().trim() === 'north ridge')!;
+    expect(nr.games).toHaveLength(2);
+    expect(nr.record).toEqual({ w: 0, l: 2, t: 0 });
+    expect(nr.fouls.map((f) => f.code).sort()).toEqual(['FST', 'OH', 'UNS-TAU']);
+  });
+
+  it('suggests each school once and counts code frequency', () => {
+    expect(schoolNames([g1, g2]).filter((s) => s.toLowerCase().trim() === 'north ridge')).toHaveLength(1);
+    expect(codeFrequency([g1, g2]).get('OH')).toBe(2);
+  });
+});

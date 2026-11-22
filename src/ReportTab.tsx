@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { buildPdf } from './pdf';
-import { buildTextReport, reportFileName, reportTitle } from './report';
+import { SEND_METHOD_NAMES, buildTextReport, fmtWhen, hashReport, reportFileName, reportTitle, sendState } from './report';
+import { encodeGame, reportUrl } from './share';
+import type { SendRecord } from './types';
 import { discipline, officialCounts, playerLabel, reportIssues, teamName, teamStats } from './rules';
 import { downloadBlob } from './store';
 import type { Game, Team } from './types';
@@ -12,16 +14,37 @@ export default function ReportTab(props: { game: Game; update: (p: Partial<Game>
   const issues = reportIssues(game);
   const disc = discipline(game);
   const byOfficial = officialCounts(game);
+  const contentHash = hashReport(game);
+  const state = sendState(game);
+  const last = game.sentLog[game.sentLog.length - 1];
+
+  // The report link is built ahead of time so the share sheet can open straight from the tap.
+  const [link, setLink] = useState('');
+  useEffect(() => {
+    let live = true;
+    encodeGame(game)
+      .then((t) => live && setLink(reportUrl(t)))
+      .catch(() => live && setLink(''));
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentHash]);
+
+  const recordSend = (method: SendRecord['method']) =>
+    update({ sentLog: [...game.sentLog, { at: Date.now(), method, hash: contentHash }] });
 
   // The PDF is built synchronously inside the tap handler: iPhone Safari only allows the
   // share sheet to open directly from a user tap.
   const sharePdf = async () => {
     const name = reportFileName(game);
-    const blob = buildPdf(game);
+    const blob = buildPdf(game, link || undefined);
     const file = new File([blob], name, { type: 'application/pdf' });
+    const text = link ? `${reportTitle(game)}\n\nView the report online: ${link}` : reportTitle(game);
     try {
       if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], title: reportTitle(game), text: reportTitle(game) });
+        await navigator.share({ files: [file], title: reportTitle(game), text });
+        recordSend('share-pdf');
         setMsg(game.refereeEmail ? `Shared. Make sure it went to ${game.refereeEmail}.` : 'Shared.');
       } else {
         downloadBlob(blob, name);
@@ -34,14 +57,15 @@ export default function ReportTab(props: { game: Game; update: (p: Partial<Game>
 
   const emailText = () => {
     const url = `mailto:${encodeURIComponent(game.refereeEmail)}?subject=${encodeURIComponent(reportTitle(game))}&body=${encodeURIComponent(
-      buildTextReport(game),
+      buildTextReport(game, link || undefined),
     )}`;
+    recordSend('email-text');
     window.location.href = url;
   };
 
   const copyText = async () => {
     try {
-      await navigator.clipboard.writeText(buildTextReport(game));
+      await navigator.clipboard.writeText(buildTextReport(game, link || undefined));
       setMsg('Report text copied.');
     } catch {
       setMsg('Copy failed on this browser.');
@@ -78,7 +102,7 @@ export default function ReportTab(props: { game: Game; update: (p: Partial<Game>
           <button type="button" className="btn" onClick={emailText} disabled={!game.refereeEmail}>
             Email as text
           </button>
-          <button type="button" className="btn ghost" onClick={() => downloadBlob(buildPdf(game), reportFileName(game))}>
+          <button type="button" className="btn ghost" onClick={() => downloadBlob(buildPdf(game, link || undefined), reportFileName(game))}>
             Download PDF
           </button>
           <button type="button" className="btn ghost" onClick={copyText}>
@@ -86,10 +110,44 @@ export default function ReportTab(props: { game: Game; update: (p: Partial<Game>
           </button>
         </div>
         <p className="muted small">
-          <b>Share PDF</b> opens your phone's share sheet. Pick Mail or Gmail; you'll need to add the referee's address yourself, because phones don't
+          Tapping <b>Share PDF</b> or <b>Email as text</b> records the game as sent; if you back out without sending, the app can't tell, so check the status below. <b>Share PDF</b> opens your phone's share sheet. Pick Mail or Gmail; you'll need to add the referee's address yourself, because phones don't
           let apps fill it in. <b>Email as text</b> fills in the address and puts the full report in the message body, with no attachment.
         </p>
         {msg && <p className="note">{msg}</p>}
+        <div className={`send-status ${state}`}>
+          {state === 'never' && <span>Not sent yet.</span>}
+          {state === 'sent' && last && (
+            <span>
+              ✓ Sent {fmtWhen(last.at)} ({SEND_METHOD_NAMES[last.method]}). Nothing has changed since.
+            </span>
+          )}
+          {state === 'changed' && last && <span>Changed since it was sent {fmtWhen(last.at)}. Send it again so the referee has the final version.</span>}
+          {state !== 'sent' && (
+            <button type="button" className="btn small" onClick={() => recordSend('manual')}>
+              Mark as sent
+            </button>
+          )}
+        </div>
+        {game.sentLog.length > 1 && (
+          <details className="small muted">
+            <summary>Send history ({game.sentLog.length})</summary>
+            <ul>
+              {game.sentLog.map((r) => (
+                <li key={r.at}>
+                  {fmtWhen(r.at)}: {SEND_METHOD_NAMES[r.method]}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {link && (
+          <p className="small muted">
+            The PDF and email include a link the referee can open in any browser.{' '}
+            <a href={link} target="_blank" rel="noreferrer">
+              Preview the link
+            </a>
+          </p>
+        )}
         <label className="final-toggle">
           <input type="checkbox" checked={game.status === 'final'} onChange={(e) => update({ status: e.target.checked ? 'final' : 'in-progress' })} />
           Mark game as final
