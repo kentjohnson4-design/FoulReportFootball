@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0b1220"/>
+  <path d="M150 110 L150 410" stroke="#e5e7eb" stroke-width="26" stroke-linecap="round"/>
+  <path d="M163 118 C230 92 280 150 370 120 L370 270 C280 300 230 242 163 268 Z" fill="#facc15"/>
+  <text x="256" y="372" font-family="Arial, Helvetica, sans-serif" font-size="92" font-weight="700" fill="#e5e7eb" text-anchor="start" dx="-60">FR</text>
+</svg>
