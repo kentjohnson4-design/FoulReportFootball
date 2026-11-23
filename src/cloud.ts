@@ -16,6 +16,7 @@ import {
 import type { FoulCode } from './data/codes';
 import { db } from './firebase';
 import { migrate } from './store';
+import { dedupeShared, isShareable, sharedToGames, toShared, type SharedGame } from './stateShare';
 import type { CrewPos, Game } from './types';
 
 export interface Profile {
@@ -24,6 +25,8 @@ export interface Profile {
   position: CrewPos | '';
   codeSetId: string;
   createdAt: number;
+  /** Consent to add this user's games to the combined team stats for their state. */
+  shareStats?: boolean;
 }
 
 export interface CodeSetDoc {
@@ -84,7 +87,8 @@ export async function flushWrites(ms = 5000): Promise<boolean> {
   return Promise.race([waitForPendingWrites(db).then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), ms))]);
 }
 
-export async function deleteAllUserData(uid: string) {
+export async function deleteAllUserData(uid: string, state?: string) {
+  if (state) await unshareAll(uid, state);
   const snap = await getDocs(gamesCol(uid));
   for (let i = 0; i < snap.docs.length; i += 400) {
     const batch = writeBatch(db);
@@ -160,4 +164,65 @@ export function useCloudSync(user: User | null, games: Game[], setGames: (f: (g:
   }, [uid, ready, games]);
 
   return state;
+}
+
+// ---- Combined state team stats (opt-in) ----
+
+const sharedCol = (state: string) => collection(db, 'stateStats', state, 'games');
+const sharedId = (uid: string, gameId: string) => `${uid}_${gameId}`;
+
+export async function unshareAll(uid: string, state: string) {
+  const snap = await getDocs(query(sharedCol(state), where('owner', '==', uid)));
+  for (let i = 0; i < snap.docs.length; i += 400) {
+    const batch = writeBatch(db);
+    snap.docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
+}
+
+export async function unshareGame(uid: string, state: string, gameId: string) {
+  await deleteDoc(doc(sharedCol(state), sharedId(uid, gameId)));
+}
+
+export async function loadStateGames(state: string, season: string): Promise<{ games: Game[]; contributors: number; records: number }> {
+  const col = sharedCol(state);
+  const snap = await getDocs(season === 'all' ? col : query(col, where('season', '==', season)));
+  const list = snap.docs.map((d) => d.data() as SharedGame);
+  return { games: sharedToGames(dedupeShared(list)), contributors: new Set(list.map((g) => g.owner)).size, records: list.length };
+}
+
+/**
+ * While the user has opted in, keeps their shared copies current. It compares against what
+ * is already shared (read once per session) so unchanged games are not uploaded again.
+ */
+export function useStateSharing(user: User | null, profile: Profile | null | undefined, games: Game[]) {
+  const uid = user?.uid ?? null;
+  const state = profile?.shareStats ? profile.state : '';
+  const known = useRef<Map<string, number> | null>(null);
+
+  useEffect(() => {
+    known.current = null;
+    if (!uid || !state) return;
+    let live = true;
+    getDocs(query(sharedCol(state), where('owner', '==', uid)))
+      .then((snap) => {
+        if (!live) return;
+        known.current = new Map(snap.docs.map((d) => [(d.data() as SharedGame).gameId, (d.data() as SharedGame).updatedAt]));
+        setTick((t) => t + 1);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [uid, state]);
+
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!uid || !state || !known.current) return;
+    for (const g of games) {
+      if (!isShareable(g) || (known.current.get(g.id) ?? -1) >= g.updatedAt) continue;
+      known.current.set(g.id, g.updatedAt);
+      setDoc(doc(sharedCol(state), sharedId(uid, g.id)), toShared(uid, g)).catch(() => known.current?.delete(g.id));
+    }
+  }, [uid, state, games, tick]);
 }

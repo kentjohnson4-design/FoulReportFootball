@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { loadStateGames } from './cloud';
 import { CODE_MAP } from './data/codes';
 import { fmtDate } from './report';
 import { teamName } from './rules';
@@ -161,7 +162,7 @@ function TeamLeaders(props: { fouls: Foul[]; games: number }) {
   );
 }
 
-export function TeamsView(props: { games: Game[]; onOpen: (id: string) => void }) {
+export function TeamsView(props: { games: Game[]; onOpen?: (id: string) => void; note?: string }) {
   const teams = useMemo(() => teamHistory(props.games), [props.games]);
   const [open, setOpen] = useState<string | null>(null);
   if (!teams.length)
@@ -202,7 +203,7 @@ export function TeamsView(props: { games: Game[]; onOpen: (id: string) => void }
               <ul className="history">
                 {t.games.map((g) => (
                   <li key={g.game.id}>
-                    <button type="button" onClick={() => props.onOpen(g.game.id)}>
+                    <button type="button" disabled={!props.onOpen} onClick={() => props.onOpen?.(g.game.id)}>
                       <span>
                         {fmtDate(g.game.date)} · {g.side === 'H' ? 'vs' : 'at'} {g.opponent}
                         {g.result && (
@@ -224,9 +225,38 @@ export function TeamsView(props: { games: Game[]; onOpen: (id: string) => void }
         );
       })}
       <p className="muted small pad-x">
-        Only games entered on this device count, so a team's numbers cover the games you worked, not its whole season. Players are matched by jersey
-        number. *Nominal yards for accepted fouls.
+        {props.note ??
+          "Only your own games count here, so a team's numbers cover the games you worked, not its whole season."}{' '}
+        Players are matched by jersey number. *Nominal yards for accepted fouls.
       </p>
     </div>
+  );
+}
+
+/** Combined team stats from every official in the state who shares their games. */
+export function StateTeamsView(props: { state: string; season: string }) {
+  const [data, setData] = useState<{ games: Game[]; contributors: number; records: number } | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setData(null);
+    setError('');
+    loadStateGames(props.state, props.season)
+      .then(setData)
+      .catch(() => setError('Couldn’t load the state stats. They need a connection; try again when you have signal.'));
+  }, [props.state, props.season]);
+  if (error) return <p className="alert warn">{error}</p>;
+  if (!data) return <p className="muted pad">Loading {props.state} team stats…</p>;
+  const dupes = data.records - data.games.length;
+  return (
+    <>
+      <p className="muted small season">
+        {data.games.length} game{data.games.length === 1 ? '' : 's'} from {data.contributors} official{data.contributors === 1 ? '' : 's'} in {props.state}
+        {dupes > 0 ? ` (${dupes} duplicate ${dupes === 1 ? 'entry' : 'entries'} of the same game merged)` : ''}.
+      </p>
+      <TeamsView
+        games={data.games}
+        note={`Combined from every ${props.state} official who shares. A team only appears with the games those officials worked; school names are matched ignoring capitals and "High School"/"HS".`}
+      />
+    </>
   );
 }

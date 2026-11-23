@@ -1,15 +1,15 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
-import { AccountScreen, PrivacyScreen, SetupProfile, SyncBadge } from './Account';
+import { AccountScreen, PrivacyScreen, SetupProfile, SyncBadge, VerifyEmail } from './Account';
 import { AdminScreen } from './Admin';
-import { checkAdmin, deleteCloudGame, flushWrites, getCodeSet, getProfile, useCloudSync, type Profile } from './cloud';
+import { checkAdmin, deleteCloudGame, flushWrites, getCodeSet, getProfile, unshareAll, unshareGame, useCloudSync, useStateSharing, type Profile } from './cloud';
 import { BUILTIN_SET, type CodeSetRef } from './data/codes';
 import { auth } from './firebase';
 import { GameView } from './GameView';
 import { fmtDate, fmtWhen, sendState } from './report';
 import { teamName } from './rules';
 import { inSeason, officialNames, schoolNames, seasonsOf } from './stats';
-import { OfficialsView, TeamsView } from './StatsViews';
+import { OfficialsView, StateTeamsView, TeamsView } from './StatsViews';
 import { blankGame, downloadBlob, importGames, loadActiveSet, loadGames, requestPersistentStorage, saveActiveSet, saveGames, todayISO } from './store';
 import type { Game } from './types';
 import { CREW_NAMES, CREW_POSITIONS } from './types';
@@ -30,7 +30,12 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null | undefined>(undefined);
   const [isAdmin, setIsAdmin] = useState(false);
   const [activeSet, setActiveSet] = useState<CodeSetRef>(loadActiveSet);
-  const sync = useCloudSync(user, games, setGames);
+  const [, setVerifiedTick] = useState(0);
+  // Email/password accounts can't use the cloud until the address is confirmed.
+  const needsVerify = !!user && !user.emailVerified && user.providerData.some((p) => p.providerId === 'password');
+  const cloudUser = needsVerify ? null : user;
+  const sync = useCloudSync(cloudUser, games, setGames);
+  useStateSharing(cloudUser, profile, games);
 
   useEffect(requestPersistentStorage, []);
   useEffect(() => setSaveFailed(!saveGames(games)), [games]);
@@ -39,7 +44,15 @@ export default function App() {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-  useEffect(() => onAuthStateChanged(auth, setUser), []);
+  const [authReady, setAuthReady] = useState(false);
+  useEffect(
+    () =>
+      onAuthStateChanged(auth, (u) => {
+        setUser(u);
+        setAuthReady(true);
+      }),
+    [],
+  );
 
   const chooseSet = (set: CodeSetRef) => {
     saveActiveSet(set);
@@ -49,6 +62,7 @@ export default function App() {
   useEffect(() => {
     setProfile(undefined);
     setIsAdmin(false);
+    const user = cloudUser;
     if (!user) return;
     let live = true;
     getProfile(user.uid)
@@ -70,7 +84,17 @@ export default function App() {
     return () => {
       live = false;
     };
-  }, [user]);
+  }, [cloudUser]);
+
+  const onProfileSaved = (p: Profile, set: CodeSetRef) => {
+    const before = profile;
+    setProfile(p);
+    chooseSet(set);
+    // Consent withdrawn, or moved to another state: take back what was shared before.
+    if (cloudUser && before?.shareStats && (!p.shareStats || before.state !== p.state)) {
+      unshareAll(cloudUser.uid, before.state).catch(() => undefined);
+    }
+  };
 
   const clearDevice = () => {
     setOpenId(null);
@@ -102,6 +126,10 @@ export default function App() {
     );
   }
 
+  if (user && needsVerify) {
+    return <VerifyEmail user={user} onVerified={() => setVerifiedTick((t) => t + 1)} onSignOut={doSignOut} />;
+  }
+
   if (user && profile === null) {
     return (
       <div className="home account">
@@ -115,8 +143,7 @@ export default function App() {
             existing={null}
             activeSet={activeSet}
             onSaved={(p, set) => {
-              setProfile(p);
-              chooseSet(set);
+              onProfileSaved(p, set);
               setScreen('home');
             }}
           />
@@ -130,6 +157,7 @@ export default function App() {
 
   if (screen === 'privacy') return <PrivacyScreen onBack={() => setScreen(user ? 'account' : 'home')} />;
   if (screen === 'admin' && isAdmin) return <AdminScreen onBack={() => setScreen('account')} />;
+  if (screen === 'account' && !authReady) return <p className="muted pad">Loading your account…</p>;
   if (screen === 'account') {
     return (
       <AccountScreen
@@ -139,10 +167,7 @@ export default function App() {
         sync={sync}
         activeSet={activeSet}
         onSetChange={chooseSet}
-        onProfileSaved={(p, set) => {
-          setProfile(p);
-          chooseSet(set);
-        }}
+        onProfileSaved={onProfileSaved}
         onSignOut={doSignOut}
         onDeleted={() => {
           clearDevice();
@@ -175,13 +200,17 @@ export default function App() {
       games={games}
       setGames={setGames}
       user={user}
+      authReady={authReady}
       sync={sync}
       profile={profile ?? null}
       activeSet={activeSet}
       onAccount={() => setScreen('account')}
       onDelete={(id) => {
         setGames((all) => all.filter((x) => x.id !== id));
-        if (user) deleteCloudGame(user.uid, id).catch(() => undefined);
+        if (cloudUser) {
+          deleteCloudGame(cloudUser.uid, id).catch(() => undefined);
+          if (profile?.shareStats) unshareGame(cloudUser.uid, profile.state, id).catch(() => undefined);
+        }
       }}
       onOpen={setOpenId}
       onCreate={(g) => {
@@ -198,6 +227,7 @@ function Home(props: {
   games: Game[];
   setGames: (f: (g: Game[]) => Game[]) => void;
   user: User | null;
+  authReady: boolean;
   sync: ReturnType<typeof useCloudSync>;
   profile: Profile | null;
   activeSet: CodeSetRef;
@@ -210,6 +240,7 @@ function Home(props: {
   const [msg, setMsg] = useState('');
   const [tab, setTab] = useState<HomeTab>('games');
   const [creating, setCreating] = useState(false);
+  const [teamSource, setTeamSource] = useState<'mine' | 'state'>('mine');
   const seasons = useMemo(() => seasonsOf(props.games), [props.games]);
   const [season, setSeason] = useState(seasons[0]);
   const games = props.games.filter((g) => inSeason(g, season));
@@ -223,7 +254,7 @@ function Home(props: {
         <div className="title-row">
           <h1>Foul Report Football</h1>
           <button type="button" className="btn small account-btn" onClick={props.onAccount}>
-            {props.user ? (props.profile?.name || 'Account').split(' ')[0] : 'Sign in'}
+            {!props.authReady ? '…' : props.user ? (props.profile?.name || 'Account').split(' ')[0] : 'Sign in'}
           </button>
         </div>
         {props.user ? <SyncBadge state={props.sync} /> : <p className="muted">Varsity foul reporting · saved on this device</p>}
@@ -359,7 +390,38 @@ function Home(props: {
       )}
 
       {tab === 'officials' && <OfficialsView games={games} onOpen={props.onOpen} />}
-      {tab === 'teams' && <TeamsView games={games} onOpen={props.onOpen} />}
+      {tab === 'teams' && (
+        <>
+          <div className="source-switch" role="group" aria-label="Whose games">
+            <button type="button" className={teamSource === 'mine' ? 'on' : ''} aria-pressed={teamSource === 'mine'} onClick={() => setTeamSource('mine')}>
+              My games
+            </button>
+            <button type="button" className={teamSource === 'state' ? 'on' : ''} aria-pressed={teamSource === 'state'} onClick={() => setTeamSource('state')}>
+              {props.profile?.state ? `All of ${props.profile.state}` : 'Whole state'}
+            </button>
+          </div>
+          {teamSource === 'mine' ? (
+            <TeamsView games={games} onOpen={props.onOpen} />
+          ) : props.user && props.profile?.shareStats ? (
+            <StateTeamsView state={props.profile.state} season={season} />
+          ) : (
+            <section className="card">
+              <h3>Statewide team stats</h3>
+              <p>
+                See every team’s most-called penalties and most-penalized players, combined from all officials in your state who share their games.
+              </p>
+              <p className="muted small">
+                {props.user
+                  ? 'Turn on “Add my games to the combined team stats” in your profile to see them. Only officials who share can see the combined numbers.'
+                  : 'Sign in, then turn on sharing in your profile. Only officials who share can see the combined numbers.'}
+              </p>
+              <button type="button" className="btn primary" onClick={props.onAccount}>
+                {props.user ? 'Open profile' : 'Sign in'}
+              </button>
+            </section>
+          )}
+        </>
+      )}
 
       {creating && (
         <NewGameSheet games={props.games} activeSet={props.activeSet} profile={props.profile} onClose={() => setCreating(false)} onCreate={props.onCreate} />

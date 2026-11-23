@@ -5,6 +5,9 @@ import { CREW_POSITIONS } from './types';
 /** Case- and spacing-insensitive key, so "John  Smith" and "john smith" are one person. */
 export const nameKey = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
 
+/** School key that also ignores a trailing "High School" / "HS", so "Central HS" = "Central". */
+export const schoolKey = (s: string) => nameKey(s).replace(/\s+(high school|h\.s\.|hs)$/, '');
+
 export function seasonsOf(games: Game[]): string[] {
   const years = new Set(games.map((g) => g.date.slice(0, 4)).filter((y) => /^\d{4}$/.test(y)));
   years.add(String(new Date().getFullYear()));
@@ -25,7 +28,7 @@ function distinctNames(values: { name: string; at: number }[]): string[] {
   return [...best.values()].sort((a, b) => b.at - a.at).map((v) => v.name);
 }
 
-export const schoolNames = (games: Game[]) =>
+export const schoolNames = (games: Game[]): string[] =>
   distinctNames(games.flatMap((g) => [{ name: g.home, at: g.updatedAt }, { name: g.away, at: g.updatedAt }]));
 
 export const officialNames = (games: Game[]) =>
@@ -125,7 +128,7 @@ export function teamHistory(games: Game[]): TeamHistory[] {
     for (const side of ['H', 'V'] as Team[]) {
       const name = (side === 'H' ? g.home : g.away).trim();
       if (!name) continue;
-      const k = nameKey(name);
+      const k = schoolKey(name);
       const e = map.get(k) ?? { name, games: [], fouls: [], record: { w: 0, l: 0, t: 0 } };
       map.set(k, e);
       const mine = side === 'H' ? g.homeScore : g.awayScore;

@@ -4,20 +4,40 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    // Email/password accounts must confirm their address; Google accounts arrive confirmed.
+    function verified() { return signedIn() && request.auth.token.email_verified == true; }
+    function isOwner(uid) { return verified() && request.auth.uid == uid; }
     // Admins are listed by account ID in the "admins" collection, which can only be
     // edited from the Firebase console.
     function isAdmin() { return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    function myProfile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function sharesIn(state) { return verified() && myProfile().get('shareStats', false) == true && myProfile().state == state; }
 
     // Each user's profile and games are readable and writable only by that user.
     match /users/{uid} {
       allow read, delete: if isOwner(uid);
-      allow create, update: if isOwner(uid) && request.resource.data.keys().hasOnly(['name', 'state', 'position', 'codeSetId', 'createdAt']);
+      allow create, update: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['name', 'state', 'position', 'codeSetId', 'createdAt', 'shareStats']);
 
       match /games/{gameId} {
         allow read, delete: if isOwner(uid);
-        allow create, update: if isOwner(uid) && request.resource.data.id == gameId && request.resource.data.fouls is list && request.resource.data.fouls.size() <= 200;
+        allow create, update: if isOwner(uid) && request.resource.data.id == gameId
+          && request.resource.data.fouls is list && request.resource.data.fouls.size() <= 200;
       }
+    }
+
+    // Combined team stats. Only officials who opted in to sharing, in that same state, can
+    // read them ("give to get"). Each person can only write and delete their own records,
+    // and only while their profile says they share in that state.
+    match /stateStats/{state}/games/{docId} {
+      allow read: if verified() && (resource.data.owner == request.auth.uid || sharesIn(state));
+      allow create, update: if sharesIn(state)
+        && request.resource.data.owner == request.auth.uid
+        && docId == request.auth.uid + '_' + request.resource.data.gameId
+        && (resource == null || resource.data.owner == request.auth.uid)
+        && request.resource.data.keys().hasOnly(['owner', 'gameId', 'season', 'date', 'home', 'away', 'homeScore', 'awayScore', 'fouls', 'updatedAt'])
+        && request.resource.data.fouls is list && request.resource.data.fouls.size() <= 200;
+      allow delete: if verified() && resource.data.owner == request.auth.uid;
     }
 
     // State code lists: anyone can read published ones (including people without an
@@ -29,7 +49,7 @@ service cloud.firestore {
     }
 
     match /admins/{uid} {
-      allow read: if isOwner(uid);
+      allow read: if signedIn() && request.auth.uid == uid;
       allow write: if false;
     }
   }

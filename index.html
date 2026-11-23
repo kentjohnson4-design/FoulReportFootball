@@ -10,6 +10,13 @@
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icon-180.png" />
     <title>Foul Report Football</title>
+    <script>
+      // Apply the saved light/dark choice before the page draws, so it doesn't flash.
+      try {
+        var t = localStorage.getItem('frf.theme.v1');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

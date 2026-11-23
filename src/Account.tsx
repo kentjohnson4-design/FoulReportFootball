@@ -6,6 +6,7 @@ import {
   deleteUser,
   reauthenticateWithCredential,
   reauthenticateWithPopup,
+  sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -17,7 +18,13 @@ import { auth } from './firebase';
 import { deleteAllUserData, getCodeSet, listCodeSets, saveProfile, type CodeSetDoc, type Profile, type SyncState } from './cloud';
 import type { CrewPos } from './types';
 import { CREW_NAMES, CREW_POSITIONS } from './types';
-import { Field } from './ui';
+import { getTheme, setTheme, type ThemeChoice } from './theme';
+import { Chips, Field } from './ui';
+
+export const PRIVACY_CONTACT = 'kentjohnson4@gmail.com';
+
+/** Where verification and reset links send people back to. */
+const returnUrl = () => ({ url: `${location.origin}${location.pathname}` });
 
 export const US_STATES = [
   'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'DC', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN',
@@ -83,6 +90,7 @@ export function SignIn(props: { onDone?: () => void }) {
             run(async () => {
               const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
               if (name.trim()) await updateProfile(cred.user, { displayName: name.trim() });
+              await sendEmailVerification(cred.user, returnUrl()).catch(() => undefined);
             });
         }}
       >
@@ -118,7 +126,7 @@ export function SignIn(props: { onDone?: () => void }) {
             onClick={() => {
               if (!email.trim()) return setMsg({ kind: 'error', text: 'Enter your email above first.' });
               run(async () => {
-                await sendPasswordResetEmail(auth, email.trim());
+                await sendPasswordResetEmail(auth, email.trim(), returnUrl());
                 setMsg({ kind: 'ok', text: `If there's an account for ${email.trim()}, a reset link is on its way.` });
               });
             }}
@@ -192,6 +200,7 @@ export function SetupProfile(props: {
   const [state, setState] = useState(props.existing?.state ?? '');
   const [position, setPosition] = useState<CrewPos | ''>(props.existing?.position ?? '');
   const [set, setSet] = useState<CodeSetRef>(props.activeSet);
+  const [share, setShare] = useState(props.existing?.shareStats ?? false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -202,7 +211,15 @@ export function SetupProfile(props: {
         e.preventDefault();
         setBusy(true);
         setErr('');
-        const p: Profile = { name: name.trim(), state, position, codeSetId: set.id, createdAt: props.existing?.createdAt ?? Date.now() };
+        const p: Profile = {
+          name: name.trim(),
+          state,
+          position,
+          codeSetId: set.id,
+          createdAt: props.existing?.createdAt ?? Date.now(),
+          // Only stored when on, so the field is absent for everyone who hasn't opted in.
+          ...(share ? { shareStats: true } : {}),
+        };
         try {
           await saveProfile(props.user.uid, p);
           props.onSaved(p, set);
@@ -237,6 +254,10 @@ export function SetupProfile(props: {
         </Field>
       </div>
       <CodeSetPicker value={set.id} state={state} onChange={setSet} />
+      <ShareConsent checked={share} state={state} onChange={setShare} />
+      {props.existing?.shareStats && !share && (
+        <p className="alert warn">Saving will remove the games you shared from the {props.existing.state} team stats.</p>
+      )}
       {err && <p className="alert danger">{err}</p>}
       <div className="send-buttons">
         <button type="submit" className="btn primary" disabled={busy}>
@@ -249,6 +270,110 @@ export function SetupProfile(props: {
         )}
       </div>
     </form>
+  );
+}
+
+export function ShareConsent(props: { checked: boolean; state: string; onChange: (v: boolean) => void }) {
+  return (
+    <>
+      <label className="share-consent">
+        <input type="checkbox" checked={props.checked} onChange={(e) => props.onChange(e.target.checked)} />
+        <span>Add my games to the combined team stats for {props.state || 'my state'}</span>
+      </label>
+      <div className="share-details">
+        <p>Optional. Turning it on lets you see every team’s top penalties and most-penalized players across all officials in your state who share.</p>
+        <ul>
+          <li>
+            <b>Shared:</b> game date, schools, final score, and for each foul the team, code, jersey number, quarter and whether it was accepted.
+          </li>
+          <li>
+            <b>Never shared:</b> your name, your crew, clock times, notes, or the referee’s email.
+          </li>
+          <li>Only signed-in officials in your state who also share can see the combined stats.</li>
+          <li>Turning it off removes everything you shared.</li>
+        </ul>
+      </div>
+    </>
+  );
+}
+
+export function ThemePicker() {
+  const [theme, setThemeState] = useState<ThemeChoice>(getTheme);
+  return (
+    <div className="theme-picker">
+      <Chips<ThemeChoice>
+        label="Appearance"
+        options={['auto', 'light', 'dark']}
+        value={theme}
+        onChange={(v) => {
+          const t = (v || 'auto') as ThemeChoice;
+          setTheme(t);
+          setThemeState(t);
+        }}
+        render={(t) => ({ auto: 'Automatic', light: 'Light', dark: 'Dark' })[t]}
+      />
+      <p className="muted small">Automatic follows your phone’s setting.</p>
+    </div>
+  );
+}
+
+/** Shown after creating an email/password account until the address is confirmed. */
+export function VerifyEmail(props: { user: User; onVerified: () => void; onSignOut: () => void }) {
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+  const check = async () => {
+    setBusy(true);
+    setMsg('');
+    try {
+      await props.user.reload();
+      if (auth.currentUser?.emailVerified) {
+        // Refresh the sign-in token so the database sees the confirmed address right away.
+        await auth.currentUser.getIdToken(true);
+        props.onVerified();
+      } else setMsg('Not confirmed yet. Tap the link in the email, then come back and try again.');
+    } catch (e) {
+      setMsg(authMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="home account">
+      <header className="home-head">
+        <h1>Confirm your email</h1>
+      </header>
+      <section className="card">
+        <p>
+          We sent a link to <b>{props.user.email}</b>. Tap it to confirm your address, then come back here. Check your spam folder if it isn’t there in a
+          minute.
+        </p>
+        <div className="send-buttons">
+          <button type="button" className="btn primary" disabled={busy} onClick={check}>
+            I’ve confirmed it
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={async () => {
+              try {
+                await sendEmailVerification(props.user, returnUrl());
+                setMsg(`Sent another link to ${props.user.email}.`);
+              } catch (e) {
+                setMsg(authMessage(e));
+              }
+            }}
+          >
+            Send the link again
+          </button>
+          <button type="button" className="btn ghost" onClick={props.onSignOut}>
+            Sign out
+          </button>
+        </div>
+        {msg && <p className="note">{msg}</p>}
+        <p className="muted small">Until then, you can sign out and keep using the app without an account.</p>
+      </section>
+    </div>
   );
 }
 
@@ -293,7 +418,7 @@ export function AccountScreen(props: {
       // Firebase only deletes an account right after a fresh sign-in, so confirm first.
       if (isPasswordUser) await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email ?? '', password));
       else await reauthenticateWithPopup(user, new GoogleAuthProvider());
-      await deleteAllUserData(user.uid);
+      await deleteAllUserData(user.uid, profile?.shareStats ? profile.state : undefined);
       await deleteUser(user);
       props.onDeleted();
     } catch (e) {
@@ -371,6 +496,10 @@ export function AccountScreen(props: {
                   <span>Code list</span>
                   <b>{props.activeSet.label}</b>
                 </p>
+                <p className="kv">
+                  <span>State team stats</span>
+                  <b>{profile.shareStats ? `Sharing with ${profile.state}` : 'Not sharing'}</b>
+                </p>
               </>
             )}
           </section>
@@ -415,6 +544,10 @@ export function AccountScreen(props: {
           </section>
         </>
       )}
+      <section className="card">
+        <h3>Appearance</h3>
+        <ThemePicker />
+      </section>
       <p className="muted small">
         <button type="button" className="btn ghost small" onClick={props.onPrivacy}>
           Privacy
@@ -438,9 +571,16 @@ export function PrivacyScreen(props: { onBack: () => void }) {
         <p>Everything you enter stays in this browser on this device. Nothing is sent anywhere until you share a report yourself.</p>
         <h3>With an account</h3>
         <p>
-          Your email address, name, state, usual position and the games you record (teams, crew names, fouls with jersey numbers, timeouts, notes and the
+          You must confirm your email address (Google accounts are already confirmed). Your email address, name, state, usual position and the games you record (teams, crew names, fouls with jersey numbers, timeouts, notes and the
           referee email you entered) are stored in Google Firebase so you can reach them from your devices. Only you can read your games. They are not sold,
           shared or used for advertising.
+        </p>
+        <h3>Combined state team stats (only if you opt in)</h3>
+        <p>
+          If you turn on sharing in your profile, a reduced copy of each finished game is added to your state’s combined stats: the date, the two schools,
+          the final score, and for each foul the team, code, jersey number, quarter and result. Your name, crew, clock times, notes and the referee’s email
+          are not included. Only signed-in officials in the same state who also share can see the combined stats. Turning sharing off, or deleting your
+          account, removes your shared copies.
         </p>
         <h3>Report links</h3>
         <p>
@@ -449,6 +589,10 @@ export function PrivacyScreen(props: { onBack: () => void }) {
         </p>
         <h3>Deleting your data</h3>
         <p>Account → Delete account removes your account and all games stored in it. Without an account, deleting a game removes it from the device.</p>
+        <h3>Contact</h3>
+        <p>
+          Questions or requests about your data: <a href={`mailto:${PRIVACY_CONTACT}`}>{PRIVACY_CONTACT}</a>
+        </p>
       </section>
     </div>
   );

@@ -173,3 +173,36 @@ describe('state code lists drive the rules', () => {
     expect(draftAlerts(g, foul({ code: 'SW1', player: 'TEAM' }))[0].suggestCode).toBe('SW2');
   });
 });
+
+describe('statewide sharing', () => {
+  it('shares only teams, score and foul basics', async () => {
+    const { toShared, isShareable } = await import('./stateShare');
+    const g = game({
+      date: '2026-09-04', homeScore: '21', awayScore: '7', refereeEmail: 'ref@example.com', notes: 'private note',
+      crew: { ...blankGame().crew, R: 'Pat Lee' },
+      fouls: [foul({ code: 'OH', player: '55', note: 'late', official: 'R', time: '7:14' })],
+    });
+    const s = toShared('u1', g);
+    const text = JSON.stringify(s);
+    expect(text).not.toMatch(/Pat Lee|ref@example|private note|late|7:14/);
+    expect(s.fouls[0]).toEqual({ team: 'H', code: 'OH', player: '55', status: 'A', quarter: 1 });
+    expect(Object.keys(s).sort()).toEqual(['away', 'awayScore', 'date', 'fouls', 'gameId', 'home', 'homeScore', 'owner', 'season', 'updatedAt']);
+    expect(isShareable(g)).toBe(true);
+    expect(isShareable({ ...g, date: '2999-01-01' })).toBe(false);
+    expect(isShareable({ ...g, date: '2999-01-01', status: 'final' })).toBe(true);
+    expect(isShareable({ ...g, away: '' })).toBe(false);
+  });
+  it('merges the same game entered by two officials', async () => {
+    const { toShared, dedupeShared, sharedToGames } = await import('./stateShare');
+    const { teamHistory } = await import('./stats');
+    const a = toShared('u1', game({ id: 'a', date: '2026-09-04', home: 'Central HS', fouls: [foul({ code: 'OH' })] }));
+    const b = toShared('u2', game({ id: 'b', date: '2026-09-04', home: 'central', fouls: [foul({ code: 'OH' }), foul({ code: 'FST' })] }));
+    const c = toShared('u2', game({ id: 'c', date: '2026-09-11', home: 'Central High School', away: 'Eastside', fouls: [foul({ code: 'DOG' })] }));
+    const merged = dedupeShared([a, b, c]);
+    expect(merged).toHaveLength(2);
+    expect(merged.find((m) => m.date === '2026-09-04')?.fouls).toHaveLength(2);
+    const central = teamHistory(sharedToGames(merged)).find((t) => t.name.toLowerCase().startsWith('central'))!;
+    expect(central.games).toHaveLength(2);
+    expect(central.fouls.map((f) => f.code).sort()).toEqual(['DOG', 'FST', 'OH']);
+  });
+});
