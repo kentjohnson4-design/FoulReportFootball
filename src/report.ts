@@ -44,75 +44,139 @@ export function periodTimeText(game: Game): string {
     .join(' | ');
 }
 
-/** Plain-text version of the report, used for the email body and clipboard. */
+const ORDINAL = ['1st', '2nd', '3rd', '4th'];
+const RULE = '------------------------------';
+
+/**
+ * Plain-text report for the email body and clipboard. Follows the paper foul report:
+ * game header, then each penalty broken out line by line in the sheet's column order
+ * (Q, Time, Team, Foul, O/D/K/R, #, A/D/O, Position), then timeouts, crew, toss and times.
+ * Each field is on its own labelled line so it reads well in any mail app and font.
+ */
 export function buildTextReport(game: Game, link?: string): string {
   const L: string[] = [];
-  L.push(`FOUL REPORT (VARSITY)`);
-  if (link) L.push(`View online: ${link}`);
+  const team = (t: Team | '') => (t ? `${t} – ${teamName(game, t)}` : '—');
+
+  L.push('FOUL REPORT – VARSITY');
   L.push(`Date: ${fmtDate(game.date)}`);
-  L.push(`Home: ${teamName(game, 'H')} ${game.homeScore || '—'}   Visitor: ${teamName(game, 'V')} ${game.awayScore || '—'}`);
-  if (game.homeKicker || game.awayKicker) L.push(`Kicker #: Home ${game.homeKicker || '—'}, Visitor ${game.awayKicker || '—'}`);
+  L.push(`Home: ${teamName(game, 'H')}   Score: ${game.homeScore || '—'}`);
+  L.push(`Away: ${teamName(game, 'V')}   Score: ${game.awayScore || '—'}`);
+  if (game.homeKicker || game.awayKicker) L.push(`H Kick #: ${game.homeKicker || '—'}   V Kick #: ${game.awayKicker || '—'}`);
+  const start = game.periodTimes['1'].start;
+  const end = game.periodTimes.OT.end || game.periodTimes['4'].end;
+  if (start || end) L.push(`Start: ${start || '—'}   End: ${end || '—'}`);
+
   L.push('');
   L.push(`PENALTIES (${game.fouls.length})`);
+  L.push(RULE);
   if (!game.fouls.length) L.push('No fouls recorded.');
   game.fouls.forEach((f, i) => {
-    const c = CODE_MAP.get(f.code);
-    L.push(
-      `${i + 1}. ${quarterLabel(f.quarter)} ${f.time || '—'} | ${f.team || '?'} ${teamName(game, f.team)} | ${f.code} ${c?.name ?? ''} | ${
-        f.side ? SIDE_NAMES[f.side] : '—'
-      } | ${playerLabel(f.player)} | ${STATUS_NAMES[f.status]} | Called by ${f.official || '—'}${f.note ? ` | Note: ${f.note}` : ''}`,
-    );
+    const name = CODE_MAP.get(f.code)?.name;
+    const official = f.official ? `${f.official}${game.crew[f.official] ? ` – ${game.crew[f.official]}` : ''}` : '—';
+    const player = playerLabel(f.player);
+    L.push(`PENALTY ${i + 1}`);
+    L.push(`  Quarter:   ${f.quarter === 5 ? 'OT' : f.quarter}`);
+    L.push(`  Time:      ${f.time || '—'}`);
+    L.push(`  Team:      ${team(f.team)}`);
+    L.push(`  Foul:      ${f.code}${name ? ` – ${name}` : ''}`);
+    L.push(`  O/D/K/R:   ${f.side ? `${f.side} – ${SIDE_NAMES[f.side]}` : '—'}`);
+    L.push(`  Player #:  ${player.startsWith('#') ? player.slice(1) : player}`);
+    L.push(`  A/D/O:     ${f.status} – ${STATUS_NAMES[f.status]}`);
+    L.push(`  Position:  ${official}`);
+    if (f.note) L.push(`  Note:      ${f.note}`);
+    L.push(RULE);
   });
+
   L.push('');
   L.push('TOTALS');
   for (const t of ['H', 'V'] as Team[]) {
     const s = teamStats(game, t);
-    L.push(
-      `${teamName(game, t)}: ${s.total} fouls (${s.accepted} accepted, ${s.declined} declined, ${s.offsetting} offsetting), ${s.yards} yds accepted (nominal), ${s.uns} unsportsmanlike, ${s.pf} personal, ${s.dq} DQ`,
-    );
+    L.push(`${team(t)}`);
+    L.push(`  Fouls: ${s.total} (${s.accepted} accepted, ${s.declined} declined, ${s.offsetting} offsetting)`);
+    L.push(`  Yards accepted (nominal): ${s.yards}`);
+    L.push(`  Unsportsmanlike: ${s.uns}   Personal: ${s.pf}   DQ: ${s.dq}`);
   }
   const disc = discipline(game);
   if (disc.length) {
     L.push('');
     L.push('UNSPORTSMANLIKE / DISQUALIFICATIONS');
     for (const d of disc) {
-      L.push(
-        `${teamName(game, d.team)} ${playerLabel(d.player)}: ${d.uns.length} UNS${d.dq.length ? `, DISQUALIFIED (${d.dq.map((f) => f.code).join(', ')})` : ''}`,
-      );
+      L.push(`  ${team(d.team)} ${playerLabel(d.player)}: ${d.uns.length} UNS${d.dq.length ? ` – DISQUALIFIED (${d.dq.map((f) => f.code).join(', ')})` : ''}`);
     }
   }
-  L.push('');
-  L.push('TIMEOUTS');
-  for (const t of ['H', 'V'] as Team[]) L.push(`${teamName(game, t)}: ${timeoutText(game, t)}`);
-  const toss = tossLines(game);
-  if (toss.length) {
+
+  for (const half of [1, 2, 'OT'] as const) {
+    const lines = (['H', 'V'] as Team[]).map((t) => {
+      const used = timeoutsUsed(game, t, half);
+      return { t, text: used.length ? used.map((x) => `${quarterLabel(x.quarter)} ${x.time || '—'}`).join(', ') : '—', n: used.length };
+    });
+    if (half === 'OT' && lines.every((x) => !x.n)) continue;
     L.push('');
-    L.push('COIN TOSS');
-    L.push(...toss);
+    L.push(`TIMEOUTS – ${half === 'OT' ? 'OT' : half === 1 ? '1ST HALF' : '2ND HALF'}`);
+    for (const x of lines) L.push(`  ${team(x.t)}: ${x.text}`);
   }
-  const times = periodTimeText(game);
-  if (times) {
-    L.push('');
-    L.push(`PERIOD TIMES: ${times}`);
-  }
-  const crew = CREW_POSITIONS.filter((p) => game.crew[p]).map((p) => `${p} (${CREW_NAMES[p]}): ${game.crew[p]}`);
+
+  const crew = CREW_POSITIONS.filter((p) => game.crew[p]);
   if (crew.length) {
     L.push('');
     L.push('CREW');
-    L.push(...crew);
+    for (const p of crew) L.push(`  ${p} – ${CREW_NAMES[p]}: ${game.crew[p]}`);
   }
+
+  const t = game.toss;
+  if (t.winner || t.choice || t.defendGoal || t.receive2ndHalf) {
+    L.push('');
+    L.push('COIN TOSS');
+    L.push(`  Toss winner: ${team(t.winner)}`);
+    if (t.choice) L.push(`  Choice: ${t.choice}`);
+    if (t.defendGoal) L.push(`  Defend: ${t.defendGoal}`);
+    if (t.receive2ndHalf) L.push(`  Receive 2nd half: ${team(t.receive2ndHalf)}`);
+  }
+  if (t.otWinner || t.otChoice || t.otEnd) {
+    L.push('');
+    L.push('OT TOSS');
+    L.push(`  Winner: ${team(t.otWinner)}`);
+    if (t.otChoice) L.push(`  Choice: ${t.otChoice}`);
+    if (t.otEnd) L.push(`  End: ${t.otEnd}`);
+  }
+
+  const periods = (['1', '2', '3', '4', 'OT'] as PeriodKey[]).filter((k) => game.periodTimes[k].start || game.periodTimes[k].end);
+  if (periods.length) {
+    L.push('');
+    L.push('QUARTER TIMES');
+    for (const k of periods) {
+      const label = k === 'OT' ? 'OT' : ORDINAL[+k - 1];
+      L.push(`  ${label}: ${game.periodTimes[k].start || '—'} – ${game.periodTimes[k].end || '—'}`);
+    }
+  }
+
   if (game.notes.trim()) {
     L.push('');
-    L.push(`NOTES: ${game.notes.trim()}`);
+    L.push('NOTES');
+    L.push(`  ${game.notes.trim()}`);
+  }
+  // The link is long, so it goes last where it doesn't push the report down.
+  if (link) {
+    L.push('');
+    L.push('View this report online (sortable, with a PDF download):');
+    L.push(link);
   }
   return L.join('\n');
 }
 
-/** Short fingerprint of the report's content, used to tell whether it changed after sending. */
+/**
+ * Fingerprint of the report's content (not its wording), used to tell whether a game
+ * changed after it was sent. Layout changes to the report don't affect it.
+ */
 export function hashReport(game: Game): string {
-  const text = buildTextReport(game);
+  const content = JSON.stringify([
+    game.date, game.home, game.away, game.homeScore, game.awayScore, game.homeKicker, game.awayKicker,
+    game.fouls.map((f) => [f.quarter, f.time, f.team, f.code, f.side, f.player, f.status, f.official, f.note]),
+    game.timeouts.map((x) => [x.team, x.quarter, x.time]),
+    game.crew, game.toss, game.periodTimes, game.notes,
+  ]);
   let h = 5381;
-  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0;
+  for (let i = 0; i < content.length; i++) h = ((h << 5) + h + content.charCodeAt(i)) | 0;
   return (h >>> 0).toString(36);
 }
 

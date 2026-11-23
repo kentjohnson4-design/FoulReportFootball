@@ -118,7 +118,19 @@ describe('report', () => {
     const g = game([foul({ code: 'DPI', team: 'V', side: 'D', player: '4', official: 'B', time: '7:14', quarter: 2 })]);
     g.refereeEmail = 'ref@example.com';
     const text = buildTextReport(g);
-    expect(text).toContain('1. Q2 7:14 | V North | DPI Pass Interference - Defense | Defense | #4 | Accepted | Called by B');
+    expect(text).toContain(
+      [
+        'PENALTY 1',
+        '  Quarter:   2',
+        '  Time:      7:14',
+        '  Team:      V – North',
+        '  Foul:      DPI – Pass Interference - Defense',
+        '  O/D/K/R:   D – Defense',
+        '  Player #:  4',
+        '  A/D/O:     A – Accepted',
+        '  Position:  B',
+      ].join('\n'),
+    );
   });
   it('flags incomplete fouls', () => {
     const g = game([foul({ official: '', time: '' })]);

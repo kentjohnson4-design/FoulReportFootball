@@ -40,7 +40,8 @@ export default function ReportTab(props: { game: Game; update: (p: Partial<Game>
     const name = reportFileName(game);
     const blob = buildPdf(game, link || undefined);
     const file = new File([blob], name, { type: 'application/pdf' });
-    const text = link ? `${reportTitle(game)}\n\nView the report online: ${link}` : reportTitle(game);
+    // The full line-by-line report goes in the message body, with the PDF attached.
+    const text = buildTextReport(game, link || undefined);
     try {
       if (navigator.canShare?.({ files: [file] })) {
         await navigator.share({ files: [file], title: reportTitle(game), text });
