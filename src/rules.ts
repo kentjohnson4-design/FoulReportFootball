@@ -1,13 +1,18 @@
-import { CODE_MAP } from './data/codes';
+import { BUILTIN_SET, CODE_MAP, categoryOf, type CodeSetRef } from './data/codes';
 import type { Foul, Game, Official, Quarter, Team } from './types';
 import { OFFICIALS, quarterLabel } from './types';
 
-export const SIDELINE_CODES = ['SLW', 'SL5', 'UNS-SLM'];
 export const TIMEOUTS_PER_HALF = 3;
 
-export const isUNS = (code: string) => code.startsWith('UNS-') || code === 'DQ-UNS';
-export const isDQ = (code: string) => code.startsWith('DQ-');
-export const isPF = (code: string) => code.startsWith('PF-');
+export const isUNS = (code: string) => ['uns', 'dq-uns', 'sl-15'].includes(categoryOf(code));
+export const isDQ = (code: string) => ['dq', 'dq-uns'].includes(categoryOf(code));
+export const isPF = (code: string) => categoryOf(code) === 'pf';
+export const isSideline = (code: string) => categoryOf(code).startsWith('sl-');
+
+/** The code list a game was recorded with. */
+export const bookFor = (game: Game): CodeSetRef => game.codeSet ?? BUILTIN_SET;
+
+const codeWithCategory = (game: Game, cat: string) => bookFor(game).codes.find((c) => (c.category ?? categoryOf(c.code)) === cat)?.code;
 
 export function teamName(game: Game, t: Team | ''): string {
   if (t === 'H') return game.home.trim() || 'Home';
@@ -82,9 +87,9 @@ export function draftAlerts(game: Game, draft: Foul): Alert[] {
   const p = normPlayer(draft.player);
   const who = `${teamName(game, draft.team)} ${p ? playerLabel(p) : ''}`.trim();
 
-  if (SIDELINE_CODES.includes(draft.code)) {
-    const n = sameTeam.filter((f) => SIDELINE_CODES.includes(f.code)).length;
-    const expected = n === 0 ? 'SLW' : n === 1 ? 'SL5' : 'UNS-SLM';
+  if (isSideline(draft.code)) {
+    const n = sameTeam.filter((f) => isSideline(f.code)).length;
+    const expected = codeWithCategory(game, n === 0 ? 'sl-warn' : n === 1 ? 'sl-5' : 'sl-15') ?? draft.code;
     if (expected !== draft.code) {
       alerts.push({
         level: 'warn',
@@ -97,22 +102,23 @@ export function draftAlerts(game: Game, draft: Foul): Alert[] {
     }
   }
 
+  const isDqUns = categoryOf(draft.code) === 'dq-uns';
   if (p && isUNS(draft.code)) {
     const prior = sameTeam.filter((f) => normPlayer(f.player) === p && isUNS(f.code));
-    if (prior.length >= 1 && draft.code !== 'DQ-UNS') {
+    if (prior.length >= 1 && !isDqUns) {
       alerts.push({
         level: 'danger',
         text: `${who} already has an unsportsmanlike foul (${prior.map((f) => f.code).join(', ')}). A second one is a disqualification.`,
-        suggestCode: 'DQ-UNS',
+        suggestCode: codeWithCategory(game, 'dq-uns'),
       });
     } else if (prior.length >= 1) {
       alerts.push({ level: 'danger', text: `${who} is disqualified: second unsportsmanlike foul.` });
-    } else if (draft.code === 'DQ-UNS') {
+    } else if (isDqUns) {
       alerts.push({ level: 'warn', text: `No earlier unsportsmanlike foul is recorded for ${who}.` });
     }
   }
 
-  if (p && isDQ(draft.code) && draft.code !== 'DQ-UNS') {
+  if (p && isDQ(draft.code) && !isDqUns) {
     alerts.push({ level: 'danger', text: `${who} is disqualified.` });
   }
 
@@ -151,7 +157,7 @@ export function discipline(game: Game): DisciplineEntry[] {
 }
 
 export function sidelineCount(game: Game, team: Team) {
-  return game.fouls.filter((f) => f.team === team && SIDELINE_CODES.includes(f.code)).length;
+  return game.fouls.filter((f) => f.team === team && isSideline(f.code)).length;
 }
 
 export interface TeamStats {

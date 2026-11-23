@@ -124,3 +124,52 @@ describe('team season leaders', () => {
     expect(players.find((p) => p.player === 'TEAM')).toBeUndefined();
   });
 });
+
+describe('code list upload', () => {
+  it('reads a valid CSV with quotes and aliases', async () => {
+    const { checkCodeList } = await import('./csv');
+    const r = checkCodeList('Code,Name,Yards,Category\nOH,"Holding, Offense",10,other\nUNS-X,Taunting,15,Unsportsmanlike\nDQX,"Second ""UNS""",15+DQ,dq-uns\n');
+    expect(r.errors).toEqual([]);
+    expect(r.codes).toEqual([
+      { code: 'OH', name: 'Holding, Offense', yds: '10', category: 'other' },
+      { code: 'UNS-X', name: 'Taunting', yds: '15', category: 'uns' },
+      { code: 'DQX', name: 'Second "UNS"', yds: '15+DQ', category: 'dq-uns' },
+    ]);
+  });
+  it('rejects duplicates, bad categories and missing columns', async () => {
+    const { checkCodeList } = await import('./csv');
+    expect(checkCodeList('code,name\nOH,Holding').errors[0]).toMatch(/header/);
+    const r = checkCodeList('code,name,yards,category\nOH,Holding,10,other\nOH,Holding again,10,spicy\n,No code,5,other');
+    expect(r.errors.join(' ')).toMatch(/more than once/);
+    expect(r.errors.join(' ')).toMatch(/spicy/);
+    expect(r.errors.join(' ')).toMatch(/no code/);
+  });
+  it('round-trips the built-in list through the template', async () => {
+    const { checkCodeList, toCSV } = await import('./csv');
+    const { FOUL_CODES } = await import('./data/codes');
+    const r = checkCodeList(toCSV(FOUL_CODES));
+    expect(r.errors).toEqual([]);
+    expect(r.warnings).toEqual([]);
+    expect(r.codes).toEqual(FOUL_CODES.map(({ code, name, yds, category }) => ({ code, name, yds, category })));
+  });
+});
+
+describe('state code lists drive the rules', () => {
+  it('uses categories from a game’s own list', async () => {
+    const { draftAlerts, isUNS, isDQ } = await import('./rules');
+    const { registerCodes } = await import('./data/codes');
+    const codes = [
+      { code: 'TAUNT', name: 'Taunting', yds: '15', category: 'uns' as const },
+      { code: 'EJECT2', name: 'Second UNS', yds: '15', category: 'dq-uns' as const },
+      { code: 'SW1', name: 'Sideline warning', yds: 'Warn', category: 'sl-warn' as const },
+      { code: 'SW2', name: 'Sideline 5', yds: '5', category: 'sl-5' as const },
+      { code: 'SW3', name: 'Sideline 15', yds: '15', category: 'sl-15' as const },
+    ];
+    registerCodes(codes);
+    const g = game({ codeSet: { id: 'xx-2026', label: 'XX 2026', codes }, fouls: [foul({ code: 'TAUNT', team: 'V', player: '9' }), foul({ code: 'SW1', player: 'TEAM' })] });
+    expect(isUNS('TAUNT')).toBe(true);
+    expect(isDQ('EJECT2')).toBe(true);
+    expect(draftAlerts(g, foul({ code: 'TAUNT', team: 'V', player: '9' })).find((a) => a.suggestCode)?.suggestCode).toBe('EJECT2');
+    expect(draftAlerts(g, foul({ code: 'SW1', player: 'TEAM' }))[0].suggestCode).toBe('SW2');
+  });
+});

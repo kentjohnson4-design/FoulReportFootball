@@ -1,3 +1,4 @@
+import { BUILTIN_SET, registerCodes, type CodeSetRef } from './data/codes';
 import type { Game } from './types';
 
 const GAMES_KEY = 'frf.games.v1';
@@ -81,6 +82,7 @@ export function blankGame(prev?: Game): Game {
 
 /** Fill in any fields added after a game was saved, so old games keep loading. */
 export function migrate(g: Partial<Game>): Game {
+  registerCodes(g.codeSet?.codes);
   const base = blankGame();
   return {
     ...base,
@@ -132,4 +134,30 @@ export function downloadBlob(blob: Blob, filename: string) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+const SET_KEY = 'frf.codeSet.v1';
+
+/** The code list chosen for new games, cached so it works offline. */
+export function loadActiveSet(): CodeSetRef {
+  try {
+    const v = JSON.parse(localStorage.getItem(SET_KEY) ?? 'null');
+    if (v?.id && Array.isArray(v.codes)) {
+      registerCodes(v.codes);
+      return v;
+    }
+  } catch {
+    /* fall through */
+  }
+  return BUILTIN_SET;
+}
+
+export function saveActiveSet(s: CodeSetRef) {
+  registerCodes(s.codes);
+  try {
+    if (s.id === BUILTIN_SET.id) localStorage.removeItem(SET_KEY);
+    else localStorage.setItem(SET_KEY, JSON.stringify(s));
+  } catch {
+    /* ignore */
+  }
 }

@@ -1,3 +1,5 @@
+import type { CodeSetRef } from './data/codes';
+
 export type Team = 'H' | 'V';
 export type Side = 'O' | 'D' | 'K' | 'R';
 export type Status = 'A' | 'D' | 'O';
@@ -69,6 +71,8 @@ export interface Game {
   status: 'in-progress' | 'final';
   notes: string;
   sentLog: SendRecord[];
+  /** The state code list used for this game; absent means the built-in sheet. */
+  codeSet?: CodeSetRef;
 }
 
 export const OFFICIALS: Official[] = ['R', 'U', 'L', 'H', 'B', 'D'];

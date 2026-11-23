@@ -1,10 +1,16 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
+import { AccountScreen, PrivacyScreen, SetupProfile, SyncBadge } from './Account';
+import { AdminScreen } from './Admin';
+import { checkAdmin, deleteCloudGame, flushWrites, getCodeSet, getProfile, useCloudSync, type Profile } from './cloud';
+import { BUILTIN_SET, type CodeSetRef } from './data/codes';
+import { auth } from './firebase';
 import { GameView } from './GameView';
 import { fmtDate, fmtWhen, sendState } from './report';
 import { teamName } from './rules';
 import { inSeason, officialNames, schoolNames, seasonsOf } from './stats';
 import { OfficialsView, TeamsView } from './StatsViews';
-import { blankGame, downloadBlob, importGames, loadGames, requestPersistentStorage, saveGames, todayISO } from './store';
+import { blankGame, downloadBlob, importGames, loadActiveSet, loadGames, requestPersistentStorage, saveActiveSet, saveGames, todayISO } from './store';
 import type { Game } from './types';
 import { CREW_NAMES, CREW_POSITIONS } from './types';
 import { Field, Modal } from './ui';
@@ -18,6 +24,13 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [saveFailed, setSaveFailed] = useState(false);
   const [shared, setShared] = useState<string | null>(sharedToken);
+  const [screen, setScreen] = useState<'home' | 'account' | 'admin' | 'privacy'>('home');
+  const [user, setUser] = useState<User | null>(null);
+  // undefined = still loading; null = signed in but setup not done yet
+  const [profile, setProfile] = useState<Profile | null | undefined>(undefined);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [activeSet, setActiveSet] = useState<CodeSetRef>(loadActiveSet);
+  const sync = useCloudSync(user, games, setGames);
 
   useEffect(requestPersistentStorage, []);
   useEffect(() => setSaveFailed(!saveGames(games)), [games]);
@@ -26,6 +39,53 @@ export default function App() {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
+  useEffect(() => onAuthStateChanged(auth, setUser), []);
+
+  const chooseSet = (set: CodeSetRef) => {
+    saveActiveSet(set);
+    setActiveSet(set);
+  };
+
+  useEffect(() => {
+    setProfile(undefined);
+    setIsAdmin(false);
+    if (!user) return;
+    let live = true;
+    getProfile(user.uid)
+      .then(async (p) => {
+        if (!live) return;
+        setProfile(p);
+        // On a new device, bring down the code list chosen in the profile.
+        if (p?.codeSetId && p.codeSetId !== loadActiveSet().id) {
+          if (p.codeSetId === BUILTIN_SET.id) chooseSet(BUILTIN_SET);
+          else {
+            const set = await getCodeSet(p.codeSetId).catch(() => null);
+            if (live && set) chooseSet({ id: set.id, label: set.label, codes: set.codes });
+          }
+        }
+      })
+      // Offline with nothing cached: let the user carry on; setup can wait.
+      .catch(() => live && setProfile({ name: user.displayName ?? '', state: '', position: '', codeSetId: loadActiveSet().id, createdAt: 0 }));
+    checkAdmin(user.uid).then((a) => live && setIsAdmin(a));
+    return () => {
+      live = false;
+    };
+  }, [user]);
+
+  const clearDevice = () => {
+    setOpenId(null);
+    setGames([]);
+    saveGames([]);
+  };
+
+  const doSignOut = async () => {
+    const flushed = await flushWrites();
+    if (!flushed && !confirm("Some changes haven't uploaded yet (no connection?). If you sign out now they'll be lost. Sign out anyway?")) return;
+    await signOut(auth);
+    // Games belong to the account; don't leave them on a shared device.
+    clearDevice();
+    setScreen('home');
+  };
 
   if (shared) {
     return (
@@ -39,6 +99,59 @@ export default function App() {
           onSave={(g) => setGames((all) => [...all, g])}
         />
       </Suspense>
+    );
+  }
+
+  if (user && profile === null) {
+    return (
+      <div className="home account">
+        <header className="home-head">
+          <h1>Welcome</h1>
+          <p className="muted">One-time setup for {user.email}. Your games will be saved to your account.</p>
+        </header>
+        <section className="card">
+          <SetupProfile
+            user={user}
+            existing={null}
+            activeSet={activeSet}
+            onSaved={(p, set) => {
+              setProfile(p);
+              chooseSet(set);
+              setScreen('home');
+            }}
+          />
+        </section>
+        <button type="button" className="btn ghost" onClick={doSignOut}>
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  if (screen === 'privacy') return <PrivacyScreen onBack={() => setScreen(user ? 'account' : 'home')} />;
+  if (screen === 'admin' && isAdmin) return <AdminScreen onBack={() => setScreen('account')} />;
+  if (screen === 'account') {
+    return (
+      <AccountScreen
+        user={user}
+        profile={profile ?? null}
+        isAdmin={isAdmin}
+        sync={sync}
+        activeSet={activeSet}
+        onSetChange={chooseSet}
+        onProfileSaved={(p, set) => {
+          setProfile(p);
+          chooseSet(set);
+        }}
+        onSignOut={doSignOut}
+        onDeleted={() => {
+          clearDevice();
+          setScreen('home');
+        }}
+        onBack={() => setScreen('home')}
+        onAdmin={() => setScreen('admin')}
+        onPrivacy={() => setScreen('privacy')}
+      />
     );
   }
 
@@ -61,6 +174,15 @@ export default function App() {
     <Home
       games={games}
       setGames={setGames}
+      user={user}
+      sync={sync}
+      profile={profile ?? null}
+      activeSet={activeSet}
+      onAccount={() => setScreen('account')}
+      onDelete={(id) => {
+        setGames((all) => all.filter((x) => x.id !== id));
+        if (user) deleteCloudGame(user.uid, id).catch(() => undefined);
+      }}
       onOpen={setOpenId}
       onCreate={(g) => {
         setGames((all) => [...all, g]);
@@ -72,7 +194,18 @@ export default function App() {
 
 type HomeTab = 'games' | 'officials' | 'teams';
 
-function Home(props: { games: Game[]; setGames: (f: (g: Game[]) => Game[]) => void; onOpen: (id: string) => void; onCreate: (g: Game) => void }) {
+function Home(props: {
+  games: Game[];
+  setGames: (f: (g: Game[]) => Game[]) => void;
+  user: User | null;
+  sync: ReturnType<typeof useCloudSync>;
+  profile: Profile | null;
+  activeSet: CodeSetRef;
+  onAccount: () => void;
+  onDelete: (id: string) => void;
+  onOpen: (id: string) => void;
+  onCreate: (g: Game) => void;
+}) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState('');
   const [tab, setTab] = useState<HomeTab>('games');
@@ -87,8 +220,13 @@ function Home(props: { games: Game[]; setGames: (f: (g: Game[]) => Game[]) => vo
   return (
     <div className="home">
       <header className="home-head">
-        <h1>Foul Report Football</h1>
-        <p className="muted">Varsity foul reporting · saves on this device</p>
+        <div className="title-row">
+          <h1>Foul Report Football</h1>
+          <button type="button" className="btn small account-btn" onClick={props.onAccount}>
+            {props.user ? (props.profile?.name || 'Account').split(' ')[0] : 'Sign in'}
+          </button>
+        </div>
+        {props.user ? <SyncBadge state={props.sync} /> : <p className="muted">Varsity foul reporting · saved on this device</p>}
       </header>
       <button type="button" className="btn primary block" onClick={() => setCreating(true)}>
         + New game
@@ -164,7 +302,7 @@ function Home(props: { games: Game[]; setGames: (f: (g: Game[]) => Game[]) => vo
                       aria-label={`Delete ${teamName(g, 'V')} at ${teamName(g, 'H')}`}
                       onClick={() => {
                         if (confirm(`Delete ${teamName(g, 'V')} at ${teamName(g, 'H')} (${fmtDate(g.date)})? This cannot be undone.`)) {
-                          props.setGames((all) => all.filter((x) => x.id !== g.id));
+                          props.onDelete(g.id);
                         }
                       }}
                     >
@@ -223,15 +361,21 @@ function Home(props: { games: Game[]; setGames: (f: (g: Game[]) => Game[]) => vo
       {tab === 'officials' && <OfficialsView games={games} onOpen={props.onOpen} />}
       {tab === 'teams' && <TeamsView games={games} onOpen={props.onOpen} />}
 
-      {creating && <NewGameSheet games={props.games} onClose={() => setCreating(false)} onCreate={props.onCreate} />}
+      {creating && (
+        <NewGameSheet games={props.games} activeSet={props.activeSet} profile={props.profile} onClose={() => setCreating(false)} onCreate={props.onCreate} />
+      )}
     </div>
   );
 }
 
-function NewGameSheet(props: { games: Game[]; onClose: () => void; onCreate: (g: Game) => void }) {
+function NewGameSheet(props: { games: Game[]; activeSet: CodeSetRef; profile: Profile | null; onClose: () => void; onCreate: (g: Game) => void }) {
   const latest = useMemo(() => [...props.games].sort((a, b) => b.createdAt - a.createdAt)[0], [props.games]);
   const [g, setG] = useState<Game>(() => {
     const base = blankGame();
+    // New games use the chosen state code list; the built-in list is the default.
+    if (props.activeSet.id !== BUILTIN_SET.id) base.codeSet = props.activeSet;
+    const { profile } = props;
+    if (profile?.position && profile.name) base.crew[profile.position] = profile.name;
     return base;
   });
   const [copyCrew, setCopyCrew] = useState(false);
@@ -263,7 +407,7 @@ function NewGameSheet(props: { games: Game[]; onClose: () => void; onCreate: (g:
           <option key={n} value={n} />
         ))}
       </datalist>
-      <Field label="Date">
+      <Field label="Date" hint={`Code list: ${props.activeSet.label}`}>
         <input type="date" value={g.date} onChange={(e) => set({ date: e.target.value })} />
       </Field>
       <Field label="Home school (H)">
@@ -290,7 +434,9 @@ function NewGameSheet(props: { games: Game[]; onClose: () => void; onCreate: (g:
             checked={copyCrew}
             onChange={(e) => {
               setCopyCrew(e.target.checked);
-              set({ crew: e.target.checked ? { ...latest!.crew } : blankGame().crew });
+              const fresh = blankGame().crew;
+              if (props.profile?.position && props.profile.name) fresh[props.profile.position] = props.profile.name;
+              set({ crew: e.target.checked ? { ...latest!.crew } : fresh });
             }}
           />
           Same crew as last game ({lastCrew.map((p) => `${p} ${latest!.crew[p].split(' ').slice(-1)[0]}`).join(', ')})

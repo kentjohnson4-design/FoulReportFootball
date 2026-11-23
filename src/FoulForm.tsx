@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
-import { CODE_MAP, DEFAULT_PLAYER, DEFAULT_SIDE, FOUL_CODES, STARTER_COMMON, codeGroup, searchCodes } from './data/codes';
+import { CODE_MAP, DEFAULT_PLAYER, DEFAULT_SIDE, STARTER_COMMON, categoryOf, codeGroup, searchCodes } from './data/codes';
 import { codeFrequency } from './stats';
-import { clockError, draftAlerts, teamName } from './rules';
+import { bookFor, clockError, draftAlerts, teamName } from './rules';
 import { pushRecentCode, uid } from './store';
 import type { Foul, Game, Official, Quarter, Side, Status, Team } from './types';
 import { OFFICIALS, QUARTERS, SIDE_NAMES, STATUS_NAMES, quarterLabel } from './types';
@@ -40,11 +40,13 @@ export function FoulForm(props: {
   const [browsing, setBrowsing] = useState(!props.initial);
   // Most-called codes across every game on this device; the starter list fills in until
   // there are enough of the user's own fouls to rank.
+  const book = bookFor(game).codes;
+  const inBook = useMemo(() => new Set(book.map((c) => c.code)), [book]);
   const freq = useMemo(() => codeFrequency(props.allGames), [props.allGames]);
   const mostCalled = useMemo(() => {
     const own = [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
-    return [...new Set([...own, ...STARTER_COMMON])].slice(0, 8);
-  }, [freq]);
+    return [...new Set([...own, ...STARTER_COMMON])].filter((c) => inBook.has(c)).slice(0, 8);
+  }, [freq, inBook]);
   const historyCount = useMemo(() => [...freq.values()].reduce((a, b) => a + b, 0), [freq]);
   const set = (patch: Partial<Foul>) => setD((prev) => ({ ...prev, ...patch }));
 
@@ -53,13 +55,17 @@ export function FoulForm(props: {
       ...prev,
       code,
       side: prev.side || DEFAULT_SIDE[code] || '',
-      player: prev.player || DEFAULT_PLAYER[code] || '',
+      player:
+        prev.player ||
+        DEFAULT_PLAYER[code] ||
+        { 'sl-warn': 'TEAM', 'sl-5': 'TEAM', 'sl-15': 'HC' }[categoryOf(code) as string] ||
+        '',
     }));
     setQuery('');
     setBrowsing(false);
   };
 
-  const matches = useMemo(() => searchCodes(query, freq), [query, freq]);
+  const matches = useMemo(() => searchCodes(query, freq, book), [query, freq, book]);
 
   const alerts = draftAlerts(game, d);
   const clockErr = clockError(d.time);
@@ -153,7 +159,7 @@ export function FoulForm(props: {
                     ? matches
                     : g === 'MOST'
                       ? mostCalled.map((c) => CODE_MAP.get(c)!).filter(Boolean)
-                      : FOUL_CODES.filter((c) => codeGroup(c.code) === g);
+                      : book.filter((c) => codeGroup(c.code) === g);
                 const label = g === 'MOST' ? (historyCount >= 10 ? 'Your most called' : 'Most common') : g === 'Matches' ? '' : g;
                 return (
                   <div key={g}>

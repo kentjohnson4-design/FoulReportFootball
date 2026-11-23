@@ -2,11 +2,38 @@
 // Yardage is the nominal penalty from that sheet; it is not the yardage actually walked off
 // (half-distance, enforcement spot and offsetting fouls change that).
 
+/**
+ * What kind of foul a code is. The rule checks (second unsportsmanlike = DQ, the sideline
+ * progression) and the stats depend on this, so every uploaded code list must say it.
+ */
+export type Category = 'other' | 'pf' | 'uns' | 'dq' | 'dq-uns' | 'sl-warn' | 'sl-5' | 'sl-15';
+
+export const CATEGORIES: { id: Category; label: string }[] = [
+  { id: 'other', label: 'Other foul' },
+  { id: 'pf', label: 'Personal foul' },
+  { id: 'uns', label: 'Unsportsmanlike' },
+  { id: 'dq', label: 'Disqualification' },
+  { id: 'dq-uns', label: 'DQ for second unsportsmanlike' },
+  { id: 'sl-warn', label: 'Sideline warning (1st)' },
+  { id: 'sl-5', label: 'Sideline 5 yards (2nd)' },
+  { id: 'sl-15', label: 'Sideline 15 yards (3rd+, unsportsmanlike)' },
+];
+
 export interface FoulCode {
   code: string;
   name: string;
   yds: string;
+  category?: Category;
 }
+
+/** A state's code list as stored with each game, so old reports never change. */
+export interface CodeSetRef {
+  id: string;
+  label: string;
+  codes: FoulCode[];
+}
+
+export const BUILTIN_ID = 'builtin';
 
 export const CODE_SET_LABEL = '2026 NFHS';
 
@@ -94,12 +121,40 @@ export const FOUL_CODES: FoulCode[] = [
   { code: 'UNS-UFA', name: 'Unfair Act', yds: '15' },
 ];
 
-export const CODE_MAP = new Map(FOUL_CODES.map((c) => [c.code, c]));
+/** Category for the built-in sheet, read from its code prefixes. */
+export function inferCategory(code: string): Category {
+  if (code === 'SLW') return 'sl-warn';
+  if (code === 'SL5') return 'sl-5';
+  if (code === 'UNS-SLM') return 'sl-15';
+  if (code === 'DQ-UNS') return 'dq-uns';
+  if (code.startsWith('DQ-')) return 'dq';
+  if (code.startsWith('UNS-')) return 'uns';
+  if (code.startsWith('PF-')) return 'pf';
+  return 'other';
+}
+
+for (const c of FOUL_CODES) c.category = inferCategory(c.code);
+
+export const BUILTIN_SET: CodeSetRef = { id: BUILTIN_ID, label: `Built-in (${CODE_SET_LABEL} sheet)`, codes: FOUL_CODES };
+
+/**
+ * Every code the app has seen: the built-in sheet plus any state lists loaded with games
+ * or chosen in settings. Used to show names and categories wherever only a code is known.
+ * If two states used the same code differently, the most recently loaded one wins.
+ */
+export const CODE_MAP = new Map<string, FoulCode>(FOUL_CODES.map((c) => [c.code, c]));
+
+export function registerCodes(codes: FoulCode[] | undefined) {
+  for (const c of codes ?? []) if (c?.code) CODE_MAP.set(c.code, c);
+}
+
+export const categoryOf = (code: string): Category => CODE_MAP.get(code)?.category ?? inferCategory(code);
 
 export function codeGroup(code: string): string {
-  if (code.startsWith('PF-')) return 'Personal fouls';
-  if (code.startsWith('UNS-')) return 'Unsportsmanlike';
-  if (code.startsWith('DQ-')) return 'Disqualifications';
+  const cat = categoryOf(code);
+  if (cat === 'pf') return 'Personal fouls';
+  if (cat === 'uns' || cat === 'sl-15') return 'Unsportsmanlike';
+  if (cat === 'dq' || cat === 'dq-uns') return 'Disqualifications';
   return 'Other fouls';
 }
 
@@ -141,9 +196,11 @@ export const STARTER_COMMON = ['FST', 'OH', 'IBB', 'DOG', 'ENC', 'PF-UNR', 'DPI'
 
 function searchWords(c: FoulCode): string[] {
   const extra: string[] = [];
-  if (c.code.startsWith('PF-')) extra.push('personal', 'foul');
-  if (c.code.startsWith('UNS-')) extra.push('unsportsmanlike');
-  if (c.code.startsWith('DQ-')) extra.push('ejection', 'eject', 'disqualification');
+  const cat = c.category ?? inferCategory(c.code);
+  if (cat === 'pf') extra.push('personal', 'foul');
+  if (cat === 'uns' || cat === 'sl-15') extra.push('unsportsmanlike');
+  if (cat === 'dq' || cat === 'dq-uns') extra.push('ejection', 'eject', 'disqualification');
+  if (cat.startsWith('sl-')) extra.push('sideline');
   return [...c.code.split('-'), ...c.name.split(/[^A-Za-z0-9<]+/), ...(ALIASES[c.code] ?? '').split(' '), ...extra]
     .filter(Boolean)
     .map((w) => w.toUpperCase());
@@ -154,12 +211,12 @@ function searchWords(c: FoulCode): string[] {
  * (code, name or common nickname), so "hold def" finds DH and "pi" finds DPI and OPI.
  * Ties go to the codes this user calls most.
  */
-export function searchCodes(query: string, freq: Map<string, number>): FoulCode[] {
+export function searchCodes(query: string, freq: Map<string, number>, list: FoulCode[] = FOUL_CODES): FoulCode[] {
   const q = query.trim().toUpperCase();
-  if (!q) return FOUL_CODES;
+  if (!q) return list;
   const tokens = q.split(/\s+/);
   const scored: [FoulCode, number][] = [];
-  for (const c of FOUL_CODES) {
+  for (const c of list) {
     const bare = c.code.replace(/^(PF|UNS|DQ)-/, '');
     let score = 0;
     if (c.code === q || bare === q) score = 100;

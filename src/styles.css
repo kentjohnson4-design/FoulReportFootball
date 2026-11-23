@@ -356,3 +356,32 @@ details ul { margin: 6px 0; padding-left: 20px; }
 .tag.uns { background: var(--warn-bg); color: var(--warn); }
 .tag.dq { background: var(--danger-bg); color: var(--danger); }
 .dq-row th { color: var(--danger); }
+
+/* Accounts and admin */
+.title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.account-btn { border-radius: 999px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.back-link { padding: 0; margin-bottom: 6px; min-height: 32px; }
+.sync { display: block; font-size: 13px; margin-top: 4px; color: var(--muted); }
+.sync-synced { color: #15803d; }
+.sync-pending, .sync-connecting { color: var(--muted); }
+.sync-offline { color: var(--warn); }
+.sync-error { color: var(--danger); font-weight: 600; }
+@media (prefers-color-scheme: dark) { .sync-synced { color: #4ade80; } }
+.signin { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.btn.google { background: var(--surface); border-color: var(--border); font-size: 17px; }
+.btn.google .g { font-weight: 800; color: #4285f4; font-size: 19px; }
+.or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.or::before, .or::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
+.signin-links { display: flex; justify-content: space-between; flex-wrap: wrap; }
+.danger-zone { border: 1px solid var(--danger); border-radius: 10px; padding: 12px; margin-top: 10px; }
+.btn.danger:not(.ghost) { background: var(--danger); color: #fff; border-color: var(--danger); }
+code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; word-break: break-all; }
+.admin-row { flex-wrap: wrap; }
+.game-row.static { cursor: default; }
+.admin-actions { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 10px 10px 14px; }
+.alert.stacked { display: block; }
+.alert.stacked ul { margin: 6px 0 0; padding-left: 18px; font-weight: 500; }
+.preview-table { max-height: 320px; overflow: auto; }
+.prose p { line-height: 1.5; }
+.setup select, .account select { min-height: var(--tap); }
+.stats td.left { text-align: left; }

@@ -1,0 +1,36 @@
+rules_version = '2';
+
+// Paste this file into Firebase console > Firestore Database > Rules, then Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    // Admins are listed by account ID in the "admins" collection, which can only be
+    // edited from the Firebase console.
+    function isAdmin() { return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+
+    // Each user's profile and games are readable and writable only by that user.
+    match /users/{uid} {
+      allow read, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && request.resource.data.keys().hasOnly(['name', 'state', 'position', 'codeSetId', 'createdAt']);
+
+      match /games/{gameId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && request.resource.data.id == gameId && request.resource.data.fouls is list && request.resource.data.fouls.size() <= 200;
+      }
+    }
+
+    // State code lists: anyone can read published ones (including people without an
+    // account); only admins can see drafts or change anything.
+    match /codeSets/{setId} {
+      allow read: if resource.data.published == true || isAdmin();
+      allow write: if isAdmin() && request.resource.data.codes is list && request.resource.data.codes.size() <= 400;
+      allow delete: if isAdmin();
+    }
+
+    match /admins/{uid} {
+      allow read: if isOwner(uid);
+      allow write: if false;
+    }
+  }
+}
