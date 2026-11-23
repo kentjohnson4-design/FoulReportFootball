@@ -106,3 +106,21 @@ describe('history and stats', () => {
     expect(codeFrequency([g1, g2]).get('OH')).toBe(2);
   });
 });
+
+describe('team season leaders', () => {
+  it('ranks penalties and players for one team', async () => {
+    const { topPenalties, topPlayers } = await import('./stats');
+    const fs: Foul[] = [
+      foul({ code: 'OH', player: '55' }), foul({ code: 'OH', player: '55', status: 'D' }), foul({ code: 'OH', player: '60' }),
+      foul({ code: 'FST', player: '72' }), foul({ code: 'UNS-TAU', player: '4' }), foul({ code: 'DQ-UNS', player: '4' }),
+      foul({ code: 'DOG', player: 'TEAM' }), foul({ code: 'UNS-SLM', player: 'HC' }),
+    ];
+    const pens = topPenalties(fs);
+    expect(pens[0]).toEqual({ code: 'OH', count: 3, accepted: 2, yards: 20 });
+    expect(pens).toHaveLength(5);
+    const players = topPlayers(fs);
+    expect(players.map((p) => p.player)).toEqual(['4', '55', 'HC', '60', '72']);
+    expect(players[0]).toMatchObject({ count: 2, uns: 2, dq: 1 });
+    expect(players.find((p) => p.player === 'TEAM')).toBeUndefined();
+  });
+});

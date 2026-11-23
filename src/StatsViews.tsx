@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { CODE_MAP } from './data/codes';
 import { fmtDate } from './report';
 import { teamName } from './rules';
-import { officialStats, perGame, summarize, teamHistory, topCodes } from './stats';
+import { officialStats, perGame, summarize, teamHistory, topCodes, topPenalties, topPlayers } from './stats';
+import { playerLabel } from './rules';
 import type { CrewPos, Foul, Game } from './types';
 import { CREW_POSITIONS } from './types';
 
@@ -96,6 +97,70 @@ export function OfficialsView(props: { games: Game[]; onOpen: (id: string) => vo
   );
 }
 
+function TeamLeaders(props: { fouls: Foul[]; games: number }) {
+  const pens = topPenalties(props.fouls, 5);
+  const players = topPlayers(props.fouls, 5);
+  if (!pens.length) return <p className="muted small">No fouls recorded against this team.</p>;
+  return (
+    <div className="leaders">
+      <div>
+        <h4>Top 5 penalties</h4>
+        <table className="stats leader-table">
+          <thead>
+            <tr>
+              <th>Foul</th>
+              <th>Times</th>
+              <th>Acc</th>
+              <th>Yds*</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pens.map((p) => (
+              <tr key={p.code}>
+                <th>
+                  <b>{p.code}</b> <span className="muted">{CODE_MAP.get(p.code)?.name}</span>
+                </th>
+                <td>{p.count}</td>
+                <td>{p.accepted}</td>
+                <td>{p.yards}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h4>Most penalized players</h4>
+        {players.length === 0 ? (
+          <p className="muted small">No fouls with a player number yet.</p>
+        ) : (
+          <table className="stats leader-table">
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Fouls</th>
+                <th>Most often</th>
+              </tr>
+            </thead>
+            <tbody>
+              {players.map((p) => (
+                <tr key={p.player} className={p.dq ? 'dq-row' : ''}>
+                  <th>
+                    {playerLabel(p.player)}
+                    {p.uns > 0 && <span className="tag uns">{p.uns} UNS</span>}
+                    {p.dq > 0 && <span className="tag dq">DQ</span>}
+                  </th>
+                  <td>{p.count}</td>
+                  <td className="left">{p.codes.map(([c, k]) => (k > 1 ? `${c} ×${k}` : c)).join(', ')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function TeamsView(props: { games: Game[]; onOpen: (id: string) => void }) {
   const teams = useMemo(() => teamHistory(props.games), [props.games]);
   const [open, setOpen] = useState<string | null>(null);
@@ -132,7 +197,7 @@ export function TeamsView(props: { games: Game[]; onOpen: (id: string) => void }
               <Metric label="personal" value={s.pf} />
               <Metric label="DQ" value={s.dq} />
             </div>
-            <CodeList fouls={t.fouls} />
+            <TeamLeaders fouls={t.fouls} games={n} />
             {isOpen && (
               <ul className="history">
                 {t.games.map((g) => (
@@ -158,7 +223,10 @@ export function TeamsView(props: { games: Game[]; onOpen: (id: string) => void }
           </section>
         );
       })}
-      <p className="muted small pad-x">Only games entered on this device count. *Nominal yards for accepted fouls.</p>
+      <p className="muted small pad-x">
+        Only games entered on this device count, so a team's numbers cover the games you worked, not its whole season. Players are matched by jersey
+        number. *Nominal yards for accepted fouls.
+      </p>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { isDQ, isPF, isUNS, teamStats } from './rules';
+import { isDQ, isPF, isUNS, nominalYards, teamStats } from './rules';
 import type { CrewPos, Foul, Game, Team } from './types';
 import { CREW_POSITIONS } from './types';
 
@@ -144,3 +144,51 @@ export function teamHistory(games: Game[]): TeamHistory[] {
 }
 
 export const perGame = (n: number, games: number) => (games ? (n / games).toFixed(1) : '0');
+
+export interface PlayerTally {
+  player: string;
+  count: number;
+  accepted: number;
+  uns: number;
+  dq: number;
+  codes: [string, number][];
+}
+
+/**
+ * The players a team was flagged for most often. Players are identified by jersey number
+ * within that team; team, bench and unnumbered fouls are left out, the head coach is kept.
+ */
+export function topPlayers(fouls: Foul[], n = 5): PlayerTally[] {
+  const map = new Map<string, Foul[]>();
+  for (const f of fouls) {
+    const p = f.player.trim().toUpperCase().replace(/^#/, '');
+    if (!p || p === 'TEAM' || p === 'BENCH') continue;
+    map.set(p, [...(map.get(p) ?? []), f]);
+  }
+  return [...map.entries()]
+    .map(([player, fs]) => ({
+      player,
+      count: fs.length,
+      accepted: fs.filter((f) => f.status === 'A').length,
+      uns: fs.filter((f) => isUNS(f.code)).length,
+      dq: fs.filter((f) => isDQ(f.code)).length,
+      codes: topCodes(fs, 3),
+    }))
+    .sort((a, b) => b.count - a.count || b.uns + b.dq - (a.uns + a.dq) || a.player.localeCompare(b.player, undefined, { numeric: true }))
+    .slice(0, n);
+}
+
+export interface CodeTally {
+  code: string;
+  count: number;
+  accepted: number;
+  yards: number;
+}
+
+/** A team's most-called penalties, with how many were accepted and the nominal yards. */
+export function topPenalties(fouls: Foul[], n = 5): CodeTally[] {
+  return topCodes(fouls, n).map(([code, count]) => {
+    const fs = fouls.filter((f) => f.code === code && f.status === 'A');
+    return { code, count, accepted: fs.length, yards: fs.reduce((s, f) => s + nominalYards(f.code), 0) };
+  });
+}
