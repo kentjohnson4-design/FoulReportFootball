@@ -158,7 +158,7 @@ export function buildTextReport(game: Game, link?: string): string {
   // The link is long, so it goes last where it doesn't push the report down.
   if (link) {
     L.push('');
-    L.push('View this report online (sortable, with a PDF download):');
+    L.push('View this report online (filter by team, download the PDF):');
     L.push(link);
   }
   return L.join('\n');
